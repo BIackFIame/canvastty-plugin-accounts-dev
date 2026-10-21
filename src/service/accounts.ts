@@ -23,6 +23,13 @@ import { POOL_INFO, isPoolProvider } from '../pools/providers.ts';
  */
 
 const STORAGE_KEY = 'accounts';
+/** What this plugin shares with readers the person approved (services[].shares in the manifest). */
+export const SHARED_METHODS = ['accounts.routes', 'accounts.quota'] as const;
+/** CanvasTTY gives a shared read 5 s; key and Ollama checks get at most this, then the last listing answers. */
+const SHARE_ROUTES_BUDGET_MS = 3_500;
+
+/** The agent's own sign-in (the default login) when CanvasTTY saw its limit used up (`limit.exhausted`). */
+export interface DefaultSignIn { provider: string; state: 'exhausted'; at: number; resetsAt: number | null; window: string | null }
 /** CanvasTTY waits 5 s for a launch; the Ollama check gets most of it. */
 const PREFLIGHT_BUDGET_MS = 3_500;
 
@@ -73,12 +80,18 @@ export class AccountsService {
   readonly quota: QuotaReader;
   /** Subscription account pools: the person's own sign-ins, several per agent (pools/service.ts). */
   readonly pools: PoolService;
+  /** Default logins CanvasTTY saw used up, per agent, until their reset (memory only). */
+  private readonly defaultSignIns = new Map<string, DefaultSignIn>();
+  /** The last model account rows a shared read listed (answers a read whose checks run late). */
+  private lastShared: { at: number; rows: Awaited<ReturnType<typeof listRoutes>> } | null = null;
+  private readonly clock: () => number;
 
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
   constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; savedPools?: unknown; poolsUnread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
     this.host = options.host;
     this.dataDir = options.dataDir;
     this.transport = options.transport;
+    this.clock = options.now ?? Date.now;
     this.settings = loadSettings(undefined);
     this.keyOrigins = {};
     this.unread = options.unread === true;
@@ -382,6 +395,98 @@ export class AccountsService {
     return contribution;
   }
 
+  // ---- what CanvasTTY tells every limits:read plugin ----
+
+  /**
+   * `canvastty.activity` `limit.exhausted`. CanvasTTY's event is provider-wide: the agent's own sign-in (the default
+   * login, `accountId: "default"`) has a window at 100 %. That login is not a model account or a pool account, so
+   * nothing of ours rests: it is remembered until its reset and shown to orchestrators and readers (list_routes,
+   * accounts.routes, accounts.quota), so they prefer the pool or an account. When an event names one of this plugin's
+   * accounts (a pool account or a model account), that account rests until the reset.
+   */
+  activity(params: unknown): boolean {
+    const event = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    if (event.type !== 'limit.exhausted' || typeof event.provider !== 'string' || !/^[a-z0-9-]{1,40}$/u.test(event.provider)) return false;
+    const now = this.clock();
+    const at = typeof event.at === 'number' && Number.isFinite(event.at) ? Math.min(event.at, now) : now;
+    const resetsAt = typeof event.resetAt === 'number' && Number.isFinite(event.resetAt) && event.resetAt > now ? event.resetAt : null;
+    const accountId = typeof event.accountId === 'string' ? event.accountId : 'default';
+    if (accountId === 'default') {
+      const window = event.window && typeof event.window === 'object' ? event.window as Record<string, unknown> : {};
+      const label = typeof window.label === 'string' && window.label.length <= 40 ? window.label : null;
+      this.defaultSignIns.set(event.provider, { provider: event.provider, state: 'exhausted', at, resetsAt, window: label });
+      this.host.emit('quota', { accountId: 'default', provider: event.provider, kind: 'exhausted', at, note: `${event.provider}'s own sign-in: ${label ?? 'a window'} used up` });
+      return true;
+    }
+    if (this.pools.noteLimit(accountId, event.provider, at, resetsAt)) return true;
+    const account = this.find(accountId);
+    if (!account || !account.agents.includes(event.provider as Harness)) return false;
+    this.quota.noteLimit(account, { source: 'host-activity', at, windows: [], exhausted: { until: resetsAt, code: 'limit' } });
+    return true;
+  }
+
+  /** Default logins still used up now (a passed reset ends it). */
+  private exhaustedDefaults(provider?: string): DefaultSignIn[] {
+    const now = this.clock();
+    for (const [key, entry] of this.defaultSignIns) if (entry.resetsAt !== null && entry.resetsAt <= now) this.defaultSignIns.delete(key);
+    return [...this.defaultSignIns.values()].filter(entry => !provider || entry.provider === provider);
+  }
+
+  // ---- shared reads (CanvasTTY's canvastty.shares.read, for readers the person approved) ----
+
+  /**
+   * One shared read. CanvasTTY routes it only for a pair the person approved, checks the answer for secrets and sizes,
+   * and gives this method `{ caller: { pluginId }, method, params }`. No keys, key states beyond "no key", homes or paths
+   * are in an answer: rows name hosts, account ids and the person's labels.
+   *
+   * - `accounts.routes { provider? }`: the model account routes and pool accounts as list_routes lists them (quota
+   *   included), the pools (`pool:<agent>`: members, free ones, the best free one's quota) and the default logins
+   *   CanvasTTY saw used up.
+   * - `accounts.quota { provider? }`: quota only (no key or Ollama checks): each model account's and pool account's
+   *   quota, the measured usage of each pool home (last 5 h), the pools and the used-up default logins.
+   */
+  async shareRead(params: unknown): Promise<unknown> {
+    const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    const method = values.method;
+    const inner = values.params && typeof values.params === 'object' && !Array.isArray(values.params) ? values.params as Record<string, unknown> : {};
+    const provider = typeof inner.provider === 'string' && /^[a-z0-9-]{1,32}$/u.test(inner.provider) ? inner.provider : undefined;
+    const at = this.clock();
+    if (method === 'accounts.routes') {
+      this.pools.demand(provider);
+      this.quota.demand(this.settings.accounts.filter(account => !provider || account.agents.includes(provider as Harness)));
+      const listing = listRoutes(this.settings.accounts, this.facts(), provider ? { provider } : {}).then(rows => { this.lastShared = { at: this.clock(), rows }; return rows; });
+      listing.catch(() => undefined);
+      const rows = await Promise.race([listing, new Promise<null>(resolve => { const timer = setTimeout(() => resolve(null), SHARE_ROUTES_BUDGET_MS); timer.unref?.(); })]).catch(() => null)
+        ?? (this.lastShared ? this.lastShared.rows.filter(row => !provider || row.provider === provider) : []);
+      return {
+        at,
+        routes: [...rows, ...this.pools.routes({ ...(provider ? { provider } : {}), effort: 'default' })].map(row => shareRow(row)),
+        pools: this.pools.summaries(provider ? { provider } : {}),
+        defaultSignIns: this.exhaustedDefaults(provider)
+      };
+    }
+    if (method === 'accounts.quota') {
+      void this.pools.refreshUsage();
+      return {
+        at,
+        accounts: this.settings.accounts.filter(account => !provider || account.agents.includes(provider as Harness)).map(account => {
+          const view = this.quota.view(account);
+          return { accountId: account.id, account: account.label, kind: 'model-account', agents: [...account.agents], ...(view ? { quota: routeQuota(view) } : {}) };
+        }),
+        poolAccounts: this.pools.view().providers.flatMap(entry => entry.accounts).filter(member => !provider || member.provider === provider).map(member => {
+          const usage = this.pools.usageOf(member.id);
+          return {
+            accountId: member.id, account: member.label, kind: 'subscription', agent: member.provider, signIn: member.signIn, running: member.running, trust: member.trust, quota: member.quota,
+            ...(usage ? { usage5h: { input: usage.input, output: usage.output, cached: usage.cached, events: usage.events, sessions: usage.sessions, measuredAt: new Date(usage.at).toISOString(), complete: usage.complete } } : {})
+          };
+        }),
+        pools: this.pools.summaries(provider ? { provider } : {}),
+        defaultSignIns: this.exhaustedDefaults(provider)
+      };
+    }
+    throw new Error('This plugin shares accounts.routes and accounts.quota only.');
+  }
+
   // ---- orchestrator tools ----
 
   private facts(): RouteFacts {
@@ -423,6 +528,7 @@ export class AccountsService {
         routes,
         pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent. Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time.`,
         signIn: 'Each agent\'s own CLI sign-in is not listed here: spawn_agent without launchOptions uses it, and CanvasTTY reports when it does not work.',
+        ...(this.exhaustedDefaults(provider).length ? { usedUpSignIns: this.exhaustedDefaults(provider).map(entry => `${entry.provider}'s own sign-in: ${entry.window ?? 'a window'} used up${entry.resetsAt ? ` until ${new Date(entry.resetsAt).toISOString()}` : ''}; prefer its pool or an account`) } : {}),
         howTo: 'Pass a ready route\'s launchOptions to spawn_agent unchanged (same provider).'
       } };
     }
@@ -448,4 +554,10 @@ export class AccountsService {
     }
     return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };
   }
+}
+
+/** A route row as shared: only the fields readers route on (no key states beyond the row's state, no paths). */
+function shareRow(row: object): Record<string, unknown> {
+  const keep = ['provider', 'agent', 'accountId', 'account', 'kind', 'model', 'endpoint', 'state', 'reason', 'launchOptions', 'quota', 'trust'];
+  return Object.fromEntries(Object.entries(row).filter(([key]) => keep.includes(key)));
 }

@@ -55,6 +55,8 @@ async function fixture(t, { limits = 'yes', events = true } = {}) {
   const limitCalls = [];
   /** home -> answer (or a function of the call count). */
   const homeLimits = new Map();
+  const usageCalls = [];
+  let usageAnswer = null;
   const host = {
     callHost: async (method, params) => {
       if (method === 'storage.get') return storage[params.key] ?? null;
@@ -71,6 +73,7 @@ async function fixture(t, { limits = 'yes', events = true } = {}) {
         if (!answer) return unavailable(params.provider, 'timeout', now);
         return typeof answer === 'function' ? answer() : answer;
       }
+      if (method === 'usage.summary') { usageCalls.push(structuredClone(params)); if (!usageAnswer) throw new Error('Unknown host method: usage.summary.'); return usageAnswer(params); }
       throw new Error(`host: ${method} not allowed`);
     },
     log: (level, message) => logs.push({ level, message }),
@@ -98,7 +101,8 @@ async function fixture(t, { limits = 'yes', events = true } = {}) {
     return added.id;
   };
   return {
-    dataDir, project, storage, logs, emitted, created, limitCalls, homeLimits, service, host, context, signInWith, addSignedIn,
+    dataDir, project, storage, logs, emitted, created, limitCalls, homeLimits, service, host, context, signInWith, addSignedIn, usageCalls,
+    setUsage: answer => { usageAnswer = answer; },
     home: id => join(dataDir, 'pools', id),
     advance: ms => { now += ms; }, now: () => now
   };
@@ -392,4 +396,95 @@ test('model accounts and pool accounts never share an id', async (t) => {
   const { service } = await fixture(t);
   const added = await service.poolAdd({ provider: 'grok', label: 'x', trust: 'D0' });
   await assert.rejects(service.save({ version: 1, accounts: [{ id: added.id, label: 'Clash', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude'] }] }), /already the name of a pool account/);
+});
+
+
+// ---- core-all: shared reads, provider-wide limit.exhausted, usage per pool home ----
+
+const secretFree = (value) => {
+  const text = JSON.stringify(value);
+  for (const secret of [TOKEN, ACCESS, EMAIL]) assert.equal(text.includes(secret), false, 'no credential or e-mail');
+  assert.doesNotMatch(text, /"(apiKey|token|password|refresh_token|access_token)"/u);
+  assert.doesNotMatch(text, /\/pools\//u, 'no home paths');
+};
+
+test('shared reads: accounts.routes lists accounts, pool accounts and pools with quota (no keys, homes or paths); accounts.quota adds usage per pool home', async (t) => {
+  const { service, addSignedIn, homeLimits, home, now, setUsage, usageCalls } = await fixture(t);
+  const a = await addSignedIn('codex', 'Codex A', 'D2');
+  const b = await addSignedIn('codex', 'Codex B', 'D1');
+  homeLimits.set(home(a), available('codex', now(), [windowOf('codex:primary', 30, now() + 3 * 3_600_000)]));
+  homeLimits.set(home(b), available('codex', now(), [windowOf('codex:primary', 70, now() + 3 * 3_600_000)]));
+  await service.poolCheck(a); await service.poolCheck(b);
+  const routes = await service.shareRead({ caller: { pluginId: 'canvastty-assistant' }, method: 'accounts.routes', params: {} });
+  secretFree(routes);
+  assert.ok(Array.isArray(routes.routes));
+  assert.deepEqual(routes.routes.filter(row => row.kind === 'subscription').map(row => row.accountId).sort(), [a, b].sort());
+  const pool = routes.pools.find(entry => entry.agent === 'codex');
+  assert.equal(pool.members, 2);
+  assert.equal(pool.ready, 2);
+  assert.equal(pool.best.accountId, a, 'the free member with the most room');
+  assert.equal(pool.best.remainingPercent, 70);
+  assert.equal(pool.trust, 'D1', 'the lowest level among free members');
+  assert.deepEqual(pool.launchOptions, { 'canvastty-accounts': { account: 'pool:codex', effort: 'default', trustFolder: false } });
+  assert.deepEqual(routes.defaultSignIns, []);
+  // A provider filter.
+  const grok = await service.shareRead({ caller: { pluginId: 'x' }, method: 'accounts.routes', params: { provider: 'grok' } });
+  assert.deepEqual(grok.pools, []);
+
+  // accounts.quota: an older core has no usage: nothing measured, still an answer.
+  const plain = await service.shareRead({ caller: { pluginId: 'canvastty-assistant' }, method: 'accounts.quota', params: {} });
+  secretFree(plain);
+  assert.equal(plain.poolAccounts.length, 2);
+  assert.equal(plain.poolAccounts.some(entry => entry.usage5h), false);
+  // With usage.summary: per home, by index into the request's homes.
+  setUsage(params => ({ since: params.since, until: now(), groupBy: ['home'], totals: {}, rows: params.homes.map((entry, index) => ({ home: index, input: 1000 * (index + 1), output: 10, cached: 500, events: 2, sessions: 1 })), truncated: false, coverage: { collectedAt: now(), complete: true } }));
+  await service.pools.refreshUsage(true);
+  assert.equal(usageCalls.length >= 1, true);
+  const call = usageCalls.at(-1);
+  assert.deepEqual(call.groupBy, ['home']);
+  assert.deepEqual(call.homes.map(entry => entry.home).sort(), [home(a), home(b)].sort(), 'the plugin\'s own homes only');
+  const quota = await service.shareRead({ caller: { pluginId: 'canvastty-assistant' }, method: 'accounts.quota', params: {} });
+  secretFree(quota);
+  const measured = quota.poolAccounts.filter(entry => entry.usage5h);
+  assert.equal(measured.length, 2);
+  assert.ok(measured.every(entry => entry.usage5h.input >= 1000 && entry.usage5h.complete === true));
+  await assert.rejects(service.shareRead({ caller: { pluginId: 'x' }, method: 'accounts.keys', params: {} }), /shares accounts.routes and accounts.quota only/);
+});
+
+test('limit.exhausted: provider-wide (the default login) is remembered and shown, never rests a pool account; a named pool account rests; malformed events change nothing', async (t) => {
+  const { service, addSignedIn, context, home, now, advance } = await fixture(t);
+  const a = await addSignedIn('grok', 'Grok A');
+  const b = await addSignedIn('grok', 'Grok B');
+  assert.equal(service.activity({ type: 'other', provider: 'grok' }), false);
+  assert.equal(service.activity({ type: 'limit.exhausted', provider: 'Not An Id!' }), false);
+  assert.equal(service.activity({ type: 'limit.exhausted', provider: 'grok', accountId: 'nobody', at: now() }), false);
+  // The core's event: provider-wide, the default login.
+  assert.equal(service.activity({ type: 'limit.exhausted', at: now(), provider: 'grok', accountId: 'default', window: { id: 'grok:monthly', label: 'month', windowMinutes: 43_200 }, resetAt: now() + 3_600_000 }), true);
+  const routes = await service.shareRead({ caller: { pluginId: 'canvastty-assistant' }, method: 'accounts.routes', params: {} });
+  assert.deepEqual(routes.defaultSignIns.map(entry => [entry.provider, entry.state, entry.resetsAt]), [['grok', 'exhausted', now() + 3_600_000]]);
+  assert.equal(routes.pools.find(entry => entry.agent === 'grok').ready, 2, 'pool accounts are other sign-ins');
+  const listed = await service.tool('list_routes', { provider: 'grok' });
+  assert.match(listed.content.usedUpSignIns[0], /grok's own sign-in: month used up/u);
+  const first = await service.prepare(context({ provider: 'grok', sessionId: 'g1', options: { account: 'pool:grok' } }));
+  assert.ok(!first.refuse);
+  service.pools.sessionEvent({ type: 'exited', session: { id: 'g1' } });
+  service.pools.sessionEvent({ type: 'closed', session: { id: 'g1' } });
+  // A named pool account (a future core may name one): it rests, the pool picks the other.
+  assert.equal(service.activity({ type: 'limit.exhausted', at: now(), provider: 'grok', accountId: a, resetAt: now() + 7_200_000 }), true);
+  const next = await service.prepare(context({ provider: 'grok', sessionId: 'g2', options: { account: 'pool:grok' } }));
+  assert.equal(next.env.GROK_HOME, home(b));
+  // The default login's note ends at its reset.
+  advance(3_600_001);
+  const later = await service.shareRead({ caller: { pluginId: 'canvastty-assistant' }, method: 'accounts.routes', params: {} });
+  assert.deepEqual(later.defaultSignIns, []);
+});
+
+test('manifest (core-all line): shares for routes and quota with a data class, usage:read, the account field visible to the Assistant only', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../canvastty.plugin.json', import.meta.url), 'utf8'));
+  const shares = manifest.services[0].shares;
+  assert.deepEqual(shares.map(entry => [entry.method, entry.dataClass]), [['accounts.routes', 'D1'], ['accounts.quota', 'D1']]);
+  for (const entry of shares) assert.match(entry.description, /no keys|never keys/u);
+  assert.ok(manifest.permissions.includes('usage:read'));
+  assert.ok(manifest.permissions.includes('limits:read'));
+  assert.deepEqual(manifest.services[0].launch.fields.find(field => field.key === 'account').visibleTo, ['canvastty-assistant']);
 });

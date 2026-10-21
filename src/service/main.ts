@@ -34,13 +34,17 @@ serve({
   },
   notifications: {
     'canvastty.sessions.event': params => { void service().then(accounts => accounts.pools.sessionEvent(params)).catch(() => undefined); },
-    'canvastty.limits.changed': params => { void service().then(accounts => accounts.pools.limitsChanged(params)).catch(() => undefined); }
+    'canvastty.limits.changed': params => { void service().then(accounts => accounts.pools.limitsChanged(params)).catch(() => undefined); },
+    // limit.exhausted: provider-wide for the default login (remembered and shown), or a named account of ours (rests).
+    'canvastty.activity': params => { void service().then(accounts => accounts.activity(params)).catch(() => undefined); }
   },
   methods: {
     // Host-only requests.
     'canvastty.launch.options': async params => (await service()).launchOptions(params.provider),
     'canvastty.launch.prepare': async params => (await service()).prepare(params as unknown as LaunchContext),
     'canvastty.tools.call': async params => (await service()).tool(String(params.tool), (params.input ?? {}) as Record<string, unknown>),
+    // A shared read another plugin's service asked for; CanvasTTY sends it only for a pair the person approved.
+    'canvastty.shares.read': async params => (await service()).shareRead(params),
     // The settings page.
     state: async () => (await service()).state(),
     save: async params => (await service()).save(params.settings),

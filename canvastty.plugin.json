@@ -13,7 +13,8 @@
     "tools:agents",
     "limits:read",
     "sessions:events",
-    "sessions:launch"
+    "sessions:launch",
+    "usage:read"
   ],
   "coreFiles": [
     {
@@ -28,8 +29,8 @@
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 147309,
-      "sha256": "1113889d7ea03f2a968d6f6bc43b92eaf587b8a2e4878fe0fe4a64f98d6f311f"
+      "bytes": 160404,
+      "sha256": "c8a4f132bcff36a0af39b4a606e487ab66da7869bb882690a8b8c7b8db157e38"
     },
     {
       "path": "settings/accounts.html",
@@ -224,6 +225,18 @@
           "roles": [
             "orchestrator"
           ]
+        }
+      ],
+      "shares": [
+        {
+          "method": "accounts.routes",
+          "description": "Model account routes and subscription pools (pool:<agent>) with each account's quota and state, for routing; host names, account ids and your labels only, never keys, homes or paths.",
+          "dataClass": "D1"
+        },
+        {
+          "method": "accounts.quota",
+          "description": "Each model account's and pool account's quota, the tokens each pool account used in the last 5 h, and agents whose own sign-in CanvasTTY saw used up; no keys, homes or paths.",
+          "dataClass": "D1"
         }
       ]
     }

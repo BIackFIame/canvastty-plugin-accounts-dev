@@ -35,6 +35,13 @@ const LIMITS_RETRY_MS = 30 * 60_000;
 const SIGN_IN_TTL_MS = 10 * 60_000;
 const RESERVATION_MS = 60_000;
 const WRITE_DELAY_MS = 500;
+/** Measured token usage per pool home (CanvasTTY's usage.summary with homes), read at most this often. */
+const USAGE_EVERY_MS = 10 * 60_000;
+/** usage.summary takes at most 8 homes per call. */
+const USAGE_HOMES_PER_CALL = 8;
+/** CanvasTTY measures usage for these agents' homes (Grok keeps no per-request usage). */
+const USAGE_PROVIDERS = new Set<string>(['claude', 'codex', 'kimi']);
+const USAGE_WINDOW_MS = 5 * 3_600_000;
 
 export const POOL_VALUE = 'pool:';
 export const MEMBER_VALUE = 'sub:';
@@ -59,6 +66,18 @@ export interface PoolMemberView {
   id: string; provider: PoolProvider; label: string; trust: PoolTrust; signIn: SignIn; running: number; lastUsedAt: number | null;
   quota: RouteQuota; limitsNote: string | null; events: QuotaEvent[]; signingIn: boolean;
 }
+/** Tokens a pool home used in the last 5 h, as CanvasTTY measured them from the CLI's own usage log. */
+export interface HomeUsage { input: number; output: number; cached: number; events: number; sessions: number; since: number; at: number; complete: boolean }
+
+/** One pool as shared with readers (no keys, no homes, no paths): how many members, how many free, the best one's quota. */
+export interface PoolSummary {
+  agent: PoolProvider; label: string; members: number; ready: number; busy: number;
+  best: (RouteQuota & { accountId: string }) | null;
+  /** The lowest data level the person trusts a free member with (`unset` when one is not set). */
+  trust: PoolTrust;
+  launchOptions: Record<string, Record<string, string | boolean>>;
+}
+
 export interface PoolsView {
   providers: Array<{ provider: PoolProvider; label: string; signInHint: { en: string; ru: string }; accounts: PoolMemberView[] }>;
   notPooled: Record<string, string>;
@@ -145,6 +164,10 @@ export class PoolService {
   private readonly due = new Map<string, number>();
   private readonly inFlight = new Map<string, Promise<void>>();
   private limits: { state: 'yes' | 'no' | 'unknown'; retryAt: number } = { state: 'unknown', retryAt: 0 };
+  /** Measured usage per member home (memory only), and whether this CanvasTTY measures it. */
+  private readonly usage = new Map<string, HomeUsage>();
+  private usageState: { state: 'yes' | 'no' | 'unknown'; at: number } = { state: 'unknown', at: 0 };
+  private usageRun: Promise<void> | null = null;
   /** Card events arrive (sessions.subscribe answered): only then can a running card be counted until it ends. */
   private cardEvents = false;
   private unread = false;
@@ -266,6 +289,87 @@ export class PoolService {
     if (typeof values.home !== 'string' || !isPoolProvider(values.provider)) return;
     const account = this.settings.accounts.find(entry => entry.provider === values.provider && this.homeOf(entry.id) === values.home);
     if (account) this.applyLimits(account, values);
+  }
+
+  /**
+   * CanvasTTY saw a limit used up for a named pool account (`canvastty.activity` `limit.exhausted` with that account):
+   * it rests until the reset. The core's provider-wide event (the default login) names no pool account and is handled
+   * by the service (`defaultSignIns`).
+   */
+  noteLimit(accountId: string, provider: string, at: number, resetAt: number | null): boolean {
+    const account = this.find(accountId);
+    if (!account || account.provider !== provider) return false;
+    const state = this.member(account.id);
+    const observed = observe(state.quota, { source: 'host-activity', at, windows: [], exhausted: { until: resetAt, code: 'limit' } }, this.now());
+    state.quota = observed.record;
+    for (const event of observed.events) this.host.emit('quota', { accountId: account.id, kind: event.kind, at: event.at, note: event.note });
+    this.save();
+    this.host.emit('pools', { changed: true });
+    return true;
+  }
+
+  /** Every pool with at least one member: members, free ones, the best free one's quota and the lowest trust. */
+  summaries(filter: { provider?: string } = {}): PoolSummary[] {
+    const out: PoolSummary[] = [];
+    const rank: Record<PoolTrust, number> = { unset: -1, D0: 0, D1: 1, D2: 2, D3: 3 };
+    for (const provider of POOL_PROVIDERS) {
+      if (filter.provider && filter.provider !== provider) continue;
+      const members = this.settings.accounts.filter(account => account.provider === provider);
+      if (!members.length) continue;
+      const { ranked } = rankPool(members, account => this.facts(account));
+      const best = ranked[0];
+      const busy = members.filter(account => this.facts(account).active > 0).length;
+      const trust = ranked.reduce<PoolTrust | null>((low, entry) => low === null || rank[entry.account.trust] < rank[low] ? entry.account.trust : low, null) ?? 'unset';
+      out.push({
+        agent: provider, label: `${POOL_INFO[provider].label} pool`, members: members.length, ready: ranked.length, busy,
+        best: best ? { ...routeQuota(best.facts.quota), accountId: best.account.id } : null, trust,
+        launchOptions: { [PLUGIN_ID]: { account: `${POOL_VALUE}${provider}`, effort: 'default', trustFolder: false } }
+      });
+    }
+    return out;
+  }
+
+  /** The last measured usage of a member's home (null: not measured). */
+  usageOf(accountId: string): HomeUsage | null { return this.usage.get(accountId) ?? null; }
+
+  /**
+   * Measured usage of the pool homes (CanvasTTY's `usage.summary` with `homes`, permission usage:read and
+   * launch:contribute): the last 5 h per home, at most every 10 min, 8 homes per call, at most CanvasTTY's 32 homes per
+   * plugin. Counts only; an older core answers "unknown method" and nothing is measured.
+   */
+  refreshUsage(force = false): Promise<void> {
+    const now = this.now();
+    if (this.usageRun) return this.usageRun;
+    if (!force && now - this.usageState.at < USAGE_EVERY_MS) return Promise.resolve();
+    if (!force && this.usageState.state === 'no' && now - this.usageState.at < LIMITS_RETRY_MS) return Promise.resolve();
+    const members = this.settings.accounts.filter(account => USAGE_PROVIDERS.has(account.provider) && this.member(account.id).signIn !== 'signed-out').slice(0, CORE_HOME_LIMIT);
+    this.usageState = { ...this.usageState, at: now };
+    if (!members.length) return Promise.resolve();
+    this.usageRun = (async () => {
+      const since = now - USAGE_WINDOW_MS;
+      for (let i = 0; i < members.length; i += USAGE_HOMES_PER_CALL) {
+        const batch = members.slice(i, i + USAGE_HOMES_PER_CALL);
+        let answer: Record<string, unknown>;
+        try {
+          answer = record(await this.host.callHost('usage.summary', { since, groupBy: ['home'], homes: batch.map(account => ({ provider: account.provider, home: this.homeOf(account.id) })) }));
+        } catch (error) {
+          if (/unknown (host )?method|does not have the (usage:read|launch:contribute) permission/iu.test(errorText(error))) { this.usageState = { state: 'no', at: now }; return; }
+          continue;
+        }
+        if (!Array.isArray(answer.rows)) continue;
+        this.usageState = { state: 'yes', at: now };
+        const complete = record(answer.coverage).complete !== false;
+        const counts = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+        batch.forEach(account => this.usage.set(account.id, { input: 0, output: 0, cached: 0, events: 0, sessions: 0, since, at: now, complete }));
+        for (const row of answer.rows.map(record)) {
+          const index = typeof row.home === 'number' && Number.isInteger(row.home) ? row.home : -1;
+          const account = batch[index];
+          if (!account) continue;
+          this.usage.set(account.id, { input: counts(row.input), output: counts(row.output), cached: counts(row.cached), events: counts(row.events), sessions: counts(row.sessions), since, at: now, complete });
+        }
+      }
+    })().finally(() => { this.usageRun = null; });
+    return this.usageRun;
   }
 
   // ---- the settings page ----
@@ -413,6 +517,7 @@ export class PoolService {
 
   /** Reads the homes that are due (the timer calls it; tests call it directly). */
   async tick(): Promise<void> {
+    void this.refreshUsage().catch(() => undefined);
     if (this.limits.state === 'no' && this.now() < this.limits.retryAt) return;
     const waiting: Promise<void>[] = [];
     for (const account of this.settings.accounts) {

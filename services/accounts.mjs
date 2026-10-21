@@ -1773,6 +1773,10 @@ var LIMITS_RETRY_MS = 30 * 6e4;
 var SIGN_IN_TTL_MS = 10 * 6e4;
 var RESERVATION_MS = 6e4;
 var WRITE_DELAY_MS2 = 500;
+var USAGE_EVERY_MS = 10 * 6e4;
+var USAGE_HOMES_PER_CALL = 8;
+var USAGE_PROVIDERS = /* @__PURE__ */ new Set(["claude", "codex", "kimi"]);
+var USAGE_WINDOW_MS = 5 * 36e5;
 var POOL_VALUE = "pool:";
 var MEMBER_VALUE = "sub:";
 var SIGN_IN_VALUE = "signin:";
@@ -1848,6 +1852,10 @@ var PoolService = class {
   due = /* @__PURE__ */ new Map();
   inFlight = /* @__PURE__ */ new Map();
   limits = { state: "unknown", retryAt: 0 };
+  /** Measured usage per member home (memory only), and whether this CanvasTTY measures it. */
+  usage = /* @__PURE__ */ new Map();
+  usageState = { state: "unknown", at: 0 };
+  usageRun = null;
   /** Card events arrive (sessions.subscribe answered): only then can a running card be counted until it ends. */
   cardEvents = false;
   unread = false;
@@ -1980,6 +1988,95 @@ var PoolService = class {
     if (typeof values.home !== "string" || !isPoolProvider(values.provider)) return;
     const account = this.settings.accounts.find((entry) => entry.provider === values.provider && this.homeOf(entry.id) === values.home);
     if (account) this.applyLimits(account, values);
+  }
+  /**
+   * CanvasTTY saw a limit used up for a named pool account (`canvastty.activity` `limit.exhausted` with that account):
+   * it rests until the reset. The core's provider-wide event (the default login) names no pool account and is handled
+   * by the service (`defaultSignIns`).
+   */
+  noteLimit(accountId, provider, at, resetAt) {
+    const account = this.find(accountId);
+    if (!account || account.provider !== provider) return false;
+    const state = this.member(account.id);
+    const observed = observe(state.quota, { source: "host-activity", at, windows: [], exhausted: { until: resetAt, code: "limit" } }, this.now());
+    state.quota = observed.record;
+    for (const event of observed.events) this.host.emit("quota", { accountId: account.id, kind: event.kind, at: event.at, note: event.note });
+    this.save();
+    this.host.emit("pools", { changed: true });
+    return true;
+  }
+  /** Every pool with at least one member: members, free ones, the best free one's quota and the lowest trust. */
+  summaries(filter = {}) {
+    const out = [];
+    const rank = { unset: -1, D0: 0, D1: 1, D2: 2, D3: 3 };
+    for (const provider of POOL_PROVIDERS) {
+      if (filter.provider && filter.provider !== provider) continue;
+      const members = this.settings.accounts.filter((account) => account.provider === provider);
+      if (!members.length) continue;
+      const { ranked } = rankPool(members, (account) => this.facts(account));
+      const best = ranked[0];
+      const busy = members.filter((account) => this.facts(account).active > 0).length;
+      const trust = ranked.reduce((low, entry) => low === null || rank[entry.account.trust] < rank[low] ? entry.account.trust : low, null) ?? "unset";
+      out.push({
+        agent: provider,
+        label: `${POOL_INFO[provider].label} pool`,
+        members: members.length,
+        ready: ranked.length,
+        busy,
+        best: best ? { ...routeQuota(best.facts.quota), accountId: best.account.id } : null,
+        trust,
+        launchOptions: { [PLUGIN_ID]: { account: `${POOL_VALUE}${provider}`, effort: "default", trustFolder: false } }
+      });
+    }
+    return out;
+  }
+  /** The last measured usage of a member's home (null: not measured). */
+  usageOf(accountId) {
+    return this.usage.get(accountId) ?? null;
+  }
+  /**
+   * Measured usage of the pool homes (CanvasTTY's `usage.summary` with `homes`, permission usage:read and
+   * launch:contribute): the last 5 h per home, at most every 10 min, 8 homes per call, at most CanvasTTY's 32 homes per
+   * plugin. Counts only; an older core answers "unknown method" and nothing is measured.
+   */
+  refreshUsage(force = false) {
+    const now = this.now();
+    if (this.usageRun) return this.usageRun;
+    if (!force && now - this.usageState.at < USAGE_EVERY_MS) return Promise.resolve();
+    if (!force && this.usageState.state === "no" && now - this.usageState.at < LIMITS_RETRY_MS) return Promise.resolve();
+    const members = this.settings.accounts.filter((account) => USAGE_PROVIDERS.has(account.provider) && this.member(account.id).signIn !== "signed-out").slice(0, CORE_HOME_LIMIT);
+    this.usageState = { ...this.usageState, at: now };
+    if (!members.length) return Promise.resolve();
+    this.usageRun = (async () => {
+      const since = now - USAGE_WINDOW_MS;
+      for (let i = 0; i < members.length; i += USAGE_HOMES_PER_CALL) {
+        const batch = members.slice(i, i + USAGE_HOMES_PER_CALL);
+        let answer;
+        try {
+          answer = record(await this.host.callHost("usage.summary", { since, groupBy: ["home"], homes: batch.map((account) => ({ provider: account.provider, home: this.homeOf(account.id) })) }));
+        } catch (error) {
+          if (/unknown (host )?method|does not have the (usage:read|launch:contribute) permission/iu.test(errorText(error))) {
+            this.usageState = { state: "no", at: now };
+            return;
+          }
+          continue;
+        }
+        if (!Array.isArray(answer.rows)) continue;
+        this.usageState = { state: "yes", at: now };
+        const complete = record(answer.coverage).complete !== false;
+        const counts = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+        batch.forEach((account) => this.usage.set(account.id, { input: 0, output: 0, cached: 0, events: 0, sessions: 0, since, at: now, complete }));
+        for (const row of answer.rows.map(record)) {
+          const index = typeof row.home === "number" && Number.isInteger(row.home) ? row.home : -1;
+          const account = batch[index];
+          if (!account) continue;
+          this.usage.set(account.id, { input: counts(row.input), output: counts(row.output), cached: counts(row.cached), events: counts(row.events), sessions: counts(row.sessions), since, at: now, complete });
+        }
+      }
+    })().finally(() => {
+      this.usageRun = null;
+    });
+    return this.usageRun;
   }
   // ---- the settings page ----
   view() {
@@ -2133,6 +2230,7 @@ var PoolService = class {
   }
   /** Reads the homes that are due (the timer calls it; tests call it directly). */
   async tick() {
+    void this.refreshUsage().catch(() => void 0);
     if (this.limits.state === "no" && this.now() < this.limits.retryAt) return;
     const waiting = [];
     for (const account of this.settings.accounts) {
@@ -2418,6 +2516,7 @@ function summarize(skipped) {
 
 // src/service/accounts.ts
 var STORAGE_KEY2 = "accounts";
+var SHARE_ROUTES_BUDGET_MS = 3500;
 var PREFLIGHT_BUDGET_MS = 3500;
 var originOf = (url) => {
   try {
@@ -2448,11 +2547,17 @@ var AccountsService = class {
   quota;
   /** Subscription account pools: the person's own sign-ins, several per agent (pools/service.ts). */
   pools;
+  /** Default logins CanvasTTY saw used up, per agent, until their reset (memory only). */
+  defaultSignIns = /* @__PURE__ */ new Map();
+  /** The last model account rows a shared read listed (answers a read whose checks run late). */
+  lastShared = null;
+  clock;
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
   constructor(options) {
     this.host = options.host;
     this.dataDir = options.dataDir;
     this.transport = options.transport;
+    this.clock = options.now ?? Date.now;
     this.settings = loadSettings(void 0);
     this.keyOrigins = {};
     this.unread = options.unread === true;
@@ -2760,6 +2865,105 @@ var AccountsService = class {
     this.quota.used(account);
     return contribution;
   }
+  // ---- what CanvasTTY tells every limits:read plugin ----
+  /**
+   * `canvastty.activity` `limit.exhausted`. CanvasTTY's event is provider-wide: the agent's own sign-in (the default
+   * login, `accountId: "default"`) has a window at 100 %. That login is not a model account or a pool account, so
+   * nothing of ours rests: it is remembered until its reset and shown to orchestrators and readers (list_routes,
+   * accounts.routes, accounts.quota), so they prefer the pool or an account. When an event names one of this plugin's
+   * accounts (a pool account or a model account), that account rests until the reset.
+   */
+  activity(params) {
+    const event = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    if (event.type !== "limit.exhausted" || typeof event.provider !== "string" || !/^[a-z0-9-]{1,40}$/u.test(event.provider)) return false;
+    const now = this.clock();
+    const at = typeof event.at === "number" && Number.isFinite(event.at) ? Math.min(event.at, now) : now;
+    const resetsAt = typeof event.resetAt === "number" && Number.isFinite(event.resetAt) && event.resetAt > now ? event.resetAt : null;
+    const accountId = typeof event.accountId === "string" ? event.accountId : "default";
+    if (accountId === "default") {
+      const window = event.window && typeof event.window === "object" ? event.window : {};
+      const label = typeof window.label === "string" && window.label.length <= 40 ? window.label : null;
+      this.defaultSignIns.set(event.provider, { provider: event.provider, state: "exhausted", at, resetsAt, window: label });
+      this.host.emit("quota", { accountId: "default", provider: event.provider, kind: "exhausted", at, note: `${event.provider}'s own sign-in: ${label ?? "a window"} used up` });
+      return true;
+    }
+    if (this.pools.noteLimit(accountId, event.provider, at, resetsAt)) return true;
+    const account = this.find(accountId);
+    if (!account || !account.agents.includes(event.provider)) return false;
+    this.quota.noteLimit(account, { source: "host-activity", at, windows: [], exhausted: { until: resetsAt, code: "limit" } });
+    return true;
+  }
+  /** Default logins still used up now (a passed reset ends it). */
+  exhaustedDefaults(provider) {
+    const now = this.clock();
+    for (const [key, entry] of this.defaultSignIns) if (entry.resetsAt !== null && entry.resetsAt <= now) this.defaultSignIns.delete(key);
+    return [...this.defaultSignIns.values()].filter((entry) => !provider || entry.provider === provider);
+  }
+  // ---- shared reads (CanvasTTY's canvastty.shares.read, for readers the person approved) ----
+  /**
+   * One shared read. CanvasTTY routes it only for a pair the person approved, checks the answer for secrets and sizes,
+   * and gives this method `{ caller: { pluginId }, method, params }`. No keys, key states beyond "no key", homes or paths
+   * are in an answer: rows name hosts, account ids and the person's labels.
+   *
+   * - `accounts.routes { provider? }`: the model account routes and pool accounts as list_routes lists them (quota
+   *   included), the pools (`pool:<agent>`: members, free ones, the best free one's quota) and the default logins
+   *   CanvasTTY saw used up.
+   * - `accounts.quota { provider? }`: quota only (no key or Ollama checks): each model account's and pool account's
+   *   quota, the measured usage of each pool home (last 5 h), the pools and the used-up default logins.
+   */
+  async shareRead(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    const method = values.method;
+    const inner = values.params && typeof values.params === "object" && !Array.isArray(values.params) ? values.params : {};
+    const provider = typeof inner.provider === "string" && /^[a-z0-9-]{1,32}$/u.test(inner.provider) ? inner.provider : void 0;
+    const at = this.clock();
+    if (method === "accounts.routes") {
+      this.pools.demand(provider);
+      this.quota.demand(this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)));
+      const listing = listRoutes(this.settings.accounts, this.facts(), provider ? { provider } : {}).then((rows2) => {
+        this.lastShared = { at: this.clock(), rows: rows2 };
+        return rows2;
+      });
+      listing.catch(() => void 0);
+      const rows = await Promise.race([listing, new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), SHARE_ROUTES_BUDGET_MS);
+        timer.unref?.();
+      })]).catch(() => null) ?? (this.lastShared ? this.lastShared.rows.filter((row) => !provider || row.provider === provider) : []);
+      return {
+        at,
+        routes: [...rows, ...this.pools.routes({ ...provider ? { provider } : {}, effort: "default" })].map((row) => shareRow(row)),
+        pools: this.pools.summaries(provider ? { provider } : {}),
+        defaultSignIns: this.exhaustedDefaults(provider)
+      };
+    }
+    if (method === "accounts.quota") {
+      void this.pools.refreshUsage();
+      return {
+        at,
+        accounts: this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)).map((account) => {
+          const view = this.quota.view(account);
+          return { accountId: account.id, account: account.label, kind: "model-account", agents: [...account.agents], ...view ? { quota: routeQuota(view) } : {} };
+        }),
+        poolAccounts: this.pools.view().providers.flatMap((entry) => entry.accounts).filter((member) => !provider || member.provider === provider).map((member) => {
+          const usage = this.pools.usageOf(member.id);
+          return {
+            accountId: member.id,
+            account: member.label,
+            kind: "subscription",
+            agent: member.provider,
+            signIn: member.signIn,
+            running: member.running,
+            trust: member.trust,
+            quota: member.quota,
+            ...usage ? { usage5h: { input: usage.input, output: usage.output, cached: usage.cached, events: usage.events, sessions: usage.sessions, measuredAt: new Date(usage.at).toISOString(), complete: usage.complete } } : {}
+          };
+        }),
+        pools: this.pools.summaries(provider ? { provider } : {}),
+        defaultSignIns: this.exhaustedDefaults(provider)
+      };
+    }
+    throw new Error("This plugin shares accounts.routes and accounts.quota only.");
+  }
   // ---- orchestrator tools ----
   facts() {
     const detections = /* @__PURE__ */ new Map();
@@ -2798,6 +3002,7 @@ var AccountsService = class {
         routes,
         pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent. Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time.`,
         signIn: "Each agent's own CLI sign-in is not listed here: spawn_agent without launchOptions uses it, and CanvasTTY reports when it does not work.",
+        ...this.exhaustedDefaults(provider).length ? { usedUpSignIns: this.exhaustedDefaults(provider).map((entry) => `${entry.provider}'s own sign-in: ${entry.window ?? "a window"} used up${entry.resetsAt ? ` until ${new Date(entry.resetsAt).toISOString()}` : ""}; prefer its pool or an account`) } : {},
         howTo: "Pass a ready route's launchOptions to spawn_agent unchanged (same provider)."
       } };
     }
@@ -2825,6 +3030,10 @@ var AccountsService = class {
     return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };
   }
 };
+function shareRow(row) {
+  const keep = ["provider", "agent", "accountId", "account", "kind", "model", "endpoint", "state", "reason", "launchOptions", "quota", "trust"];
+  return Object.fromEntries(Object.entries(row).filter(([key]) => keep.includes(key)));
+}
 
 // src/service/main.ts
 var resolveReady;
@@ -2860,6 +3069,10 @@ serve({
     },
     "canvastty.limits.changed": (params) => {
       void service().then((accounts) => accounts.pools.limitsChanged(params)).catch(() => void 0);
+    },
+    // limit.exhausted: provider-wide for the default login (remembered and shown), or a named account of ours (rests).
+    "canvastty.activity": (params) => {
+      void service().then((accounts) => accounts.activity(params)).catch(() => void 0);
     }
   },
   methods: {
@@ -2867,6 +3080,8 @@ serve({
     "canvastty.launch.options": async (params) => (await service()).launchOptions(params.provider),
     "canvastty.launch.prepare": async (params) => (await service()).prepare(params),
     "canvastty.tools.call": async (params) => (await service()).tool(String(params.tool), params.input ?? {}),
+    // A shared read another plugin's service asked for; CanvasTTY sends it only for a pair the person approved.
+    "canvastty.shares.read": async (params) => (await service()).shareRead(params),
     // The settings page.
     state: async () => (await service()).state(),
     save: async (params) => (await service()).save(params.settings),
