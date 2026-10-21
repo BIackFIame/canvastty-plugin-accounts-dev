@@ -32,6 +32,8 @@ test('the manifest\'s coreFiles match the package bytes, and the service and pag
   assert.equal(manifest.id, 'canvastty-accounts');
   // Orchestrators pass list_routes / pick_account answers to spawn_agent: the options are declared safe to delegate.
   assert.equal(manifest.services[0].launch.delegable, true);
+  // The Assistant (Jev) sees which account or pool a launch chose (peerOptions; needs a core that knows visibleTo).
+  assert.deepEqual(manifest.services[0].launch.fields.find(field => field.key === 'account').visibleTo, ['canvastty-assistant']);
   assert.ok(!manifest.permissions.includes('network'), 'a service needs no surface network permission');
 });
 

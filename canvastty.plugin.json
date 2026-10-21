@@ -74,6 +74,9 @@
                 "value": "none",
                 "label": "The agent's own sign-in"
               }
+            ],
+            "visibleTo": [
+              "canvastty-assistant"
             ]
           },
           {
