@@ -1,0 +1,1 @@
+{"code":200,"msg":"Operation successful","success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":39,"nextResetTime":1792591200000},{"type":"TIME_LIMIT","unit":5,"number":1,"usage":100,"currentValue":2,"remaining":98,"percentage":2}],"level":"lite"}}

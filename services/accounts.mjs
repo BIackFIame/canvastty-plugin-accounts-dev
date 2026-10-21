@@ -1028,20 +1028,28 @@ var pushEvent = (record, event) => {
   if (record.events.length > MAX_EVENTS) record.events.splice(0, record.events.length - MAX_EVENTS);
 };
 var time = (at) => new Date(at).toISOString().slice(0, 16).replace("T", " ") + " UTC";
-function earlyReset(previous, next, now) {
-  if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return false;
-  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return false;
+function earlyResetOf(previous, next, now) {
+  if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return null;
+  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return null;
   const drop = previous.usedPercent - next.usedPercent;
-  if (drop < Math.max(10, previous.usedPercent / 2)) return false;
-  const moved = next.resetsAt === null || Math.abs(next.resetsAt - previous.resetsAt) > RESET_TOLERANCE_MS;
-  return moved || next.usedPercent <= 1;
+  if (drop <= 0) return null;
+  if (drop < Math.max(5, previous.usedPercent / 2) && !(next.usedPercent <= 5 && previous.usedPercent > 5)) return null;
+  return {
+    window: next.id,
+    usedBefore: previous.usedPercent,
+    usedAfter: next.usedPercent,
+    announcedResetAt: previous.resetsAt,
+    reportedResetAtAfter: next.resetsAt,
+    resetTimeKept: next.resetsAt !== null && Math.abs(next.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS
+  };
 }
+var earlyNote = (detail, label) => `${label}: ${Math.round(detail.usedBefore)}% \u2192 ${Math.round(detail.usedAfter)}% before ${time(detail.announcedResetAt)}${detail.resetTimeKept ? " (the old reset time is still shown)" : detail.reportedResetAtAfter ? `, next reset ${time(detail.reportedResetAtAfter)}` : ""}`;
 var modelWindows = (windows) => windows.filter((window) => window.models && window.usedPercent !== null);
 function observe(current, observation, now) {
   const record = structuredClone(current);
   const events = [];
-  const add = (kind, note) => {
-    const event = { at: now, kind, note };
+  const add = (kind, note, early2) => {
+    const event = { at: now, kind, note, ...early2?.length ? { early: early2 } : {} };
     events.push(event);
     pushEvent(record, event);
   };
@@ -1058,11 +1066,17 @@ function observe(current, observation, now) {
     return { record, events };
   }
   const windows = observation.windows.slice(0, MAX_WINDOWS);
-  const previous = new Map(record.windows.map((window) => [window.id, window]));
-  let early = null;
+  const errorBase = wasExhausted && record.exhaustedByError && predicted !== null;
+  const previous = new Map(record.windows.map((window) => [window.id, errorBase && window.models ? { ...window, usedPercent: 100, resetsAt: predicted } : window]));
+  const early = [];
+  const notes = [];
   for (const window of windows) {
-    const before = previous.get(window.id);
-    if (before && window.models && earlyReset(before, window, now)) early = `${window.label}: ${Math.round(before.usedPercent)}% \u2192 ${Math.round(window.usedPercent)}% before ${time(before.resetsAt)}`;
+    const before = previous.get(window.id) ?? (errorBase && window.models ? { ...window, usedPercent: 100, resetsAt: predicted } : void 0);
+    const detail = before && window.models ? earlyResetOf(before, window, now) : null;
+    if (detail) {
+      early.push(detail);
+      notes.push(earlyNote(detail, window.label));
+    }
   }
   const full = modelWindows(windows).filter((window) => window.usedPercent >= 100);
   record.observedAt = observation.at;
@@ -1090,11 +1104,12 @@ function observe(current, observation, now) {
     record.exhaustedUntil = null;
     record.exhaustedOpen = false;
     record.exhaustedAt = null;
-    if (predicted !== null && now < predicted - RESET_TOLERANCE_MS) add("early-reset", early ?? `room again before the predicted reset ${time(predicted)}`);
-    else add(predicted !== null ? "reset" : "recovered", predicted !== null ? `reset as predicted (${time(predicted)})` : "room again");
+    if (early.length) add("early-reset", notes.join("; "), early);
+    else if (predicted !== null && now >= predicted - RESET_TOLERANCE_MS) add("reset", `reset as predicted (${time(predicted)})`);
+    else add("recovered", predicted !== null ? `some room again before ${time(predicted)}` : "room again");
     return { record, events };
   }
-  if (early) add("early-reset", early);
+  if (early.length) add("early-reset", notes.join("; "), early);
   return { record, events };
 }
 function readFailed(current, error, now) {
@@ -1206,7 +1221,16 @@ function loadRecord(value) {
     const at = num(e.at);
     const note = text(e.note, 200);
     const kind = ["exhausted", "early-reset", "reset", "recovered"].find((k) => k === e.kind);
-    if (at !== null && note !== null && kind) record.events.push({ at, kind, note });
+    const early = Array.isArray(e.early) ? e.early.slice(0, MAX_WINDOWS).flatMap((entry2) => {
+      if (!entry2 || typeof entry2 !== "object") return [];
+      const d = entry2;
+      const window = text(d.window, 60);
+      const before = num(d.usedBefore);
+      const after = num(d.usedAfter);
+      const announced = num(d.announcedResetAt);
+      return window && before !== null && after !== null && announced !== null ? [{ window, usedBefore: before, usedAfter: after, announcedResetAt: announced, reportedResetAtAfter: num(d.reportedResetAtAfter), resetTimeKept: d.resetTimeKept === true }] : [];
+    }) : [];
+    if (at !== null && note !== null && kind) record.events.push({ at, kind, note, ...early.length ? { early } : {} });
   }
   return record;
 }

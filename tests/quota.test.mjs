@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parseZaiQuota, parseZaiLimitError, parseFlushTime, ZaiQuotaError } from '../src/quota/zai.ts';
-import { emptyRecord, observe, viewOf, nextReadAt, readFailed, used, SCHEDULE, STALE_MS, ERROR_GRACE_MS } from '../src/quota/model.ts';
+import { emptyRecord, observe, viewOf, nextReadAt, readFailed, used, earlyResetOf, SCHEDULE, STALE_MS, ERROR_GRACE_MS } from '../src/quota/model.ts';
 import { QuotaReader, quotaUrlOf, MAX_READS_PER_HOUR } from '../src/quota/reader.ts';
 import { AccountsService } from '../src/service/accounts.ts';
 
@@ -100,6 +100,39 @@ test('an early reset (room again before the predicted reset) clears the exhausti
   ({ record } = observe(emptyRecord(), read([window('zai:tokens:10080', 64, NOW + 72 * H)], NOW), NOW));
   assert.deepEqual(observe(record, read([window('zai:tokens:10080', 0, NOW + 168 * H)], at), at).events.map(e => e.kind), ['early-reset']);
   assert.deepEqual(observe(record, read([window('zai:tokens:10080', 58, NOW + 72 * H)], at), at).events, []);
+});
+
+test('early reset by the owner\'s rule: a clear drop before the announced time, whether the provider shows a new or the old reset time', async () => {
+  const lite = parseZaiQuota(await fixture('quota-lite.json'), NOW);
+  const exhausted = parseZaiQuota(await fixture('quota-exhausted.json'), NOW);
+  let { record } = observe(emptyRecord(), exhausted, NOW);
+  // Provider A: a fresh window afterwards (no reset time until used again).
+  const at = NOW + 40 * MIN;
+  const fresh = observe(record, { ...parseZaiQuota(await fixture('quota-early-reset.json'), at), at }, at);
+  assert.deepEqual(fresh.events.map(e => e.kind), ['early-reset']);
+  const five = fresh.events[0].early.find(d => d.window === 'zai:tokens:300');
+  assert.deepEqual(five, { window: 'zai:tokens:300', usedBefore: 100, usedAfter: 0, announcedResetAt: NOW + 2 * H, reportedResetAtAfter: null, resetTimeKept: false });
+  // Provider B: still the old reset time after the reset.
+  const kept = observe(record, { ...parseZaiQuota(await fixture('quota-early-reset-kept.json'), at), at }, at);
+  assert.deepEqual(kept.events.map(e => e.kind), ['early-reset']);
+  assert.deepEqual(kept.events[0].early.map(d => [d.window, d.usedBefore, d.usedAfter, d.resetTimeKept]), [['zai:tokens:300', 100, 3, true]]);
+  assert.match(kept.events[0].note, /the old reset time is still shown/u);
+  assert.equal(viewOf(kept.record, at).state, 'ok');
+  // The old time then arrives: no second reset unless use drops again.
+  const later = NOW + 2 * H + MIN;
+  const arrival = observe(kept.record, { ...read([{ ...kept.record.windows[0], usedPercent: 9, resetsAt: NOW + 7 * H }], later) }, later);
+  assert.deepEqual(arrival.events, []);
+  // Noise: a reset time that moves without a drop, a small dip, a weekly window shedding old use.
+  ({ record } = observe(emptyRecord(), lite, NOW));
+  assert.deepEqual(observe(record, { ...parseZaiQuota(await fixture('quota-reset-moved.json'), at), at }, at).events, []);
+  assert.deepEqual(observe(record, { ...parseZaiQuota(await fixture('quota-noise.json'), at), at }, at).events, []);
+  // Down to 5 % or less counts even from a little: 8 % → 4 %.
+  assert.equal(earlyResetOf(window('zai:tokens:300', 8, NOW + H), window('zai:tokens:300', 4, NOW + H), NOW)?.usedAfter, 4);
+  assert.equal(earlyResetOf(window('zai:tokens:300', 4, NOW + H), window('zai:tokens:300', 1, NOW + H), NOW), null);
+  // A used-up window with a little room (rolling): usable again, but not called an early reset.
+  const nearly = observe(observe(emptyRecord(), read([window('zai:tokens:300', 100, NOW + 2 * H)], NOW), NOW).record, read([window('zai:tokens:300', 97, NOW + 2 * H)], at), at);
+  assert.deepEqual(nearly.events.map(e => e.kind), ['recovered']);
+  assert.equal(viewOf(nearly.record, at).state, 'low');
 });
 
 test('a limit error exhausts; a read right after it does not clear it, a later read with room does (early reset)', () => {

@@ -4,8 +4,8 @@
  *
  * Rules (the owner's): a predicted reset is never trusted blindly, and unknown is never zero.
  * - A window whose reset time passed is "probably reset": the account is offered again and read again soon.
- * - A fresh read that shows room again before the predicted reset clears the exhaustion at once ("early reset":
- *   providers hand out resets and promotional quota).
+ * - A fresh read that shows room again clears the exhaustion at once; when the used share dropped substantially before
+ *   the announced reset it is an "early reset" (earlyResetOf; providers hand out resets and promotional quota).
  * - Nothing read (or read long ago) is `unknown`/`stale`: never treated as used up.
  */
 
@@ -37,7 +37,22 @@ export interface QuotaObservation {
 }
 
 export type QuotaEventKind = 'exhausted' | 'early-reset' | 'reset' | 'recovered';
-export interface QuotaEvent { at: number; kind: QuotaEventKind; note: string }
+
+/** One window that reset before its announced time (the owner's definition: a clear drop of the used share). */
+export interface EarlyResetDetail {
+  /** The window kind, for example `zai:tokens:300` (5 h) or `zai:tokens:10080` (weekly). */
+  window: string;
+  usedBefore: number;
+  usedAfter: number;
+  /** The reset time the read before announced. */
+  announcedResetAt: number;
+  /** The reset time the provider reports now (a new window, or still the old time, or none). */
+  reportedResetAtAfter: number | null;
+  /** The provider still shows the old reset time; its arrival is then not another reset unless use drops again. */
+  resetTimeKept: boolean;
+}
+
+export interface QuotaEvent { at: number; kind: QuotaEventKind; note: string; early?: EarlyResetDetail[] }
 
 export interface QuotaRecord {
   observedAt: number | null;
@@ -106,17 +121,25 @@ const pushEvent = (record: QuotaRecord, event: QuotaEvent): void => {
 const time = (at: number): string => new Date(at).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 
 /**
- * Did this window reset before the time the previous read predicted? Either its reset time moved (a new window
- * started) while use dropped clearly, or use fell to almost nothing. A rolling window losing old use is not one.
+ * Did this window reset before the time the previous read announced? Yes when its used share dropped substantially
+ * — by at least max(5 points, half of what was used), or down to 5 % or less — while that time was still ahead,
+ * whatever the provider reports as the next reset afterwards (a fresh window, or still the old time). A reset time
+ * that moves without a drop is not a reset; a small dip (a rolling window shedding old use) is not one either.
  */
-export function earlyReset(previous: QuotaWindow, next: QuotaWindow, now: number): boolean {
-  if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return false;
-  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return false;
+export function earlyResetOf(previous: QuotaWindow, next: QuotaWindow, now: number): EarlyResetDetail | null {
+  if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return null;
+  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return null;
   const drop = previous.usedPercent - next.usedPercent;
-  if (drop < Math.max(10, previous.usedPercent / 2)) return false;
-  const moved = next.resetsAt === null || Math.abs(next.resetsAt - previous.resetsAt) > RESET_TOLERANCE_MS;
-  return moved || next.usedPercent <= 1;
+  if (drop <= 0) return null;
+  if (drop < Math.max(5, previous.usedPercent / 2) && !(next.usedPercent <= 5 && previous.usedPercent > 5)) return null;
+  return {
+    window: next.id, usedBefore: previous.usedPercent, usedAfter: next.usedPercent, announcedResetAt: previous.resetsAt,
+    reportedResetAtAfter: next.resetsAt, resetTimeKept: next.resetsAt !== null && Math.abs(next.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS
+  };
 }
+
+const earlyNote = (detail: EarlyResetDetail, label: string): string =>
+  `${label}: ${Math.round(detail.usedBefore)}% → ${Math.round(detail.usedAfter)}% before ${time(detail.announcedResetAt)}${detail.resetTimeKept ? ' (the old reset time is still shown)' : detail.reportedResetAtAfter ? `, next reset ${time(detail.reportedResetAtAfter)}` : ''}`;
 
 const modelWindows = (windows: readonly QuotaWindow[]): QuotaWindow[] => windows.filter(window => window.models && window.usedPercent !== null);
 
@@ -127,7 +150,7 @@ const modelWindows = (windows: readonly QuotaWindow[]): QuotaWindow[] => windows
 export function observe(current: QuotaRecord, observation: QuotaObservation, now: number): { record: QuotaRecord; events: QuotaEvent[] } {
   const record: QuotaRecord = structuredClone(current);
   const events: QuotaEvent[] = [];
-  const add = (kind: QuotaEventKind, note: string): void => { const event = { at: now, kind, note }; events.push(event); pushEvent(record, event); };
+  const add = (kind: QuotaEventKind, note: string, early?: EarlyResetDetail[]): void => { const event: QuotaEvent = { at: now, kind, note, ...(early?.length ? { early } : {}) }; events.push(event); pushEvent(record, event); };
   const wasExhausted = record.exhaustedOpen || (record.exhaustedUntil !== null);
   const predicted = record.exhaustedUntil;
 
@@ -144,11 +167,15 @@ export function observe(current: QuotaRecord, observation: QuotaObservation, now
   }
 
   const windows = observation.windows.slice(0, MAX_WINDOWS);
-  const previous = new Map(record.windows.map(window => [window.id, window]));
-  let early: string | null = null;
+  // Per window kind. After a limit error the windows count as full until the reset it named.
+  const errorBase = wasExhausted && record.exhaustedByError && predicted !== null;
+  const previous = new Map(record.windows.map(window => [window.id, errorBase && window.models ? { ...window, usedPercent: 100, resetsAt: predicted } : window]));
+  const early: EarlyResetDetail[] = [];
+  const notes: string[] = [];
   for (const window of windows) {
-    const before = previous.get(window.id);
-    if (before && window.models && earlyReset(before, window, now)) early = `${window.label}: ${Math.round(before.usedPercent!)}% → ${Math.round(window.usedPercent!)}% before ${time(before.resetsAt!)}`;
+    const before = previous.get(window.id) ?? (errorBase && window.models ? { ...window, usedPercent: 100, resetsAt: predicted } : undefined);
+    const detail = before && window.models ? earlyResetOf(before, window, now) : null;
+    if (detail) { early.push(detail); notes.push(earlyNote(detail, window.label)); }
   }
   const full = modelWindows(windows).filter(window => window.usedPercent! >= 100);
   record.observedAt = observation.at;
@@ -176,11 +203,13 @@ export function observe(current: QuotaRecord, observation: QuotaObservation, now
     record.exhaustedUntil = null;
     record.exhaustedOpen = false;
     record.exhaustedAt = null;
-    if (predicted !== null && now < predicted - RESET_TOLERANCE_MS) add('early-reset', early ?? `room again before the predicted reset ${time(predicted)}`);
-    else add(predicted !== null ? 'reset' : 'recovered', predicted !== null ? `reset as predicted (${time(predicted)})` : 'room again');
+    // Room again: usable at once. It is an early reset only when the used share dropped clearly before the time.
+    if (early.length) add('early-reset', notes.join('; '), early);
+    else if (predicted !== null && now >= predicted - RESET_TOLERANCE_MS) add('reset', `reset as predicted (${time(predicted)})`);
+    else add('recovered', predicted !== null ? `some room again before ${time(predicted)}` : 'room again');
     return { record, events };
   }
-  if (early) add('early-reset', early);
+  if (early.length) add('early-reset', notes.join('; '), early);
   return { record, events };
 }
 
@@ -311,7 +340,14 @@ export function loadRecord(value: unknown): QuotaRecord | null {
     const e = entry as Record<string, unknown>;
     const at = num(e.at); const note = text(e.note, 200);
     const kind = (['exhausted', 'early-reset', 'reset', 'recovered'] as const).find(k => k === e.kind);
-    if (at !== null && note !== null && kind) record.events.push({ at, kind, note });
+    const early = Array.isArray(e.early) ? e.early.slice(0, MAX_WINDOWS).flatMap(entry => {
+      if (!entry || typeof entry !== 'object') return [];
+      const d = entry as Record<string, unknown>;
+      const window = text(d.window, 60); const before = num(d.usedBefore); const after = num(d.usedAfter); const announced = num(d.announcedResetAt);
+      return window && before !== null && after !== null && announced !== null
+        ? [{ window, usedBefore: before, usedAfter: after, announcedResetAt: announced, reportedResetAtAfter: num(d.reportedResetAtAfter), resetTimeKept: d.resetTimeKept === true }] : [];
+    }) : [];
+    if (at !== null && note !== null && kind) record.events.push({ at, kind, note, ...(early.length ? { early } : {}) });
   }
   return record;
 }
