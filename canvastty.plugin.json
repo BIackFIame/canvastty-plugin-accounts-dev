@@ -25,8 +25,8 @@
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 101023,
-      "sha256": "544895f0556a95a3bc2a665e0600f85164e985cbb7272dc649228bb8294609b7"
+      "bytes": 101189,
+      "sha256": "e370d5f9983aed44adb731aa72bc45fc44c82c378789489c1e7fa4608936b351"
     },
     {
       "path": "settings/accounts.html",

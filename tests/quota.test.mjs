@@ -128,7 +128,14 @@ test('early reset by the owner\'s rule: a clear drop before the announced time, 
   assert.deepEqual(observe(record, { ...parseZaiQuota(await fixture('quota-noise.json'), at), at }, at).events, []);
   // Down to 5 % or less counts even from a little: 8 % → 4 %.
   assert.equal(earlyResetOf(window('zai:tokens:300', 8, NOW + H), window('zai:tokens:300', 4, NOW + H), NOW)?.usedAfter, 4);
-  assert.equal(earlyResetOf(window('zai:tokens:300', 4, NOW + H), window('zai:tokens:300', 1, NOW + H), NOW), null);
+  // A 2-point dip near zero is noise; a drop within 5 min of the announced reset is the normal reset (core's rule).
+  assert.equal(earlyResetOf(window('zai:tokens:300', 4, NOW + H), window('zai:tokens:300', 2, NOW + H), NOW), null);
+  assert.equal(earlyResetOf(window('zai:tokens:300', 4, NOW + H), window('zai:tokens:300', 1, NOW + H), NOW)?.usedAfter, 1);
+  assert.equal(earlyResetOf(window('zai:tokens:300', 80, NOW + 4 * MIN), window('zai:tokens:300', 0, null), NOW), null);
+  assert.equal(earlyResetOf(window('zai:tokens:300', 80, NOW + 6 * MIN), window('zai:tokens:300', 0, null), NOW)?.usedBefore, 80);
+  // The old time counts as kept within a minute; a later one is a new time.
+  assert.equal(earlyResetOf(window('zai:tokens:300', 80, NOW + H), window('zai:tokens:300', 0, NOW + H + 50_000), NOW).resetTimeKept, true);
+  assert.equal(earlyResetOf(window('zai:tokens:300', 80, NOW + H), window('zai:tokens:300', 0, NOW + H + 90_000), NOW).resetTimeKept, false);
   // A used-up window with a little room (rolling): usable again, but not called an early reset.
   const nearly = observe(observe(emptyRecord(), read([window('zai:tokens:300', 100, NOW + 2 * H)], NOW), NOW).record, read([window('zai:tokens:300', 97, NOW + 2 * H)], at), at);
   assert.deepEqual(nearly.events.map(e => e.kind), ['recovered']);
@@ -378,4 +385,21 @@ test('passive limits for an account whose quota cannot be read (MiniMax) are kep
   assert.equal(s.quota.view(ACCOUNTS[2]).state, 'presumed-reset');
   const routes = (await s.tool('list_routes', { provider: 'claude' })).content.routes;
   assert.equal(routes[0].state, 'ready');
+});
+
+const coreLimits = process.env.CANVASTTY_REPO ? await import(join(process.env.CANVASTTY_REPO, 'src/main/services/LimitsService.ts')).catch(() => null) : null;
+
+test('the GLM detector gives CanvasTTY\'s own detectEarlyResets verdicts (CANVASTTY_REPO with it)', { skip: !coreLimits?.detectEarlyResets }, async () => {
+  const at = NOW + 30 * MIN;
+  const asCore = (observation, fetchedAt) => ({ fetchedAt, providers: [{ provider: 'kimi', state: 'available', source: 'kimi-usage-api', fetchedAt,
+    windows: observation.windows.filter(w => w.models).map(w => ({ id: w.id, bucketId: 'zai', slot: 'primary', isDefaultBucket: true, label: w.label, usedPercent: w.usedPercent, used: null, limit: null, windowMinutes: w.windowMinutes, resetsAt: w.resetsAt })) }] });
+  const cases = [['quota-exhausted.json', 'quota-early-reset.json'], ['quota-exhausted.json', 'quota-early-reset-kept.json'], ['quota-lite.json', 'quota-reset-moved.json'], ['quota-lite.json', 'quota-noise.json'], ['quota-pro.json', 'quota-pro.json']];
+  for (const [first, second] of cases) {
+    const a = parseZaiQuota(await fixture(first), NOW);
+    const b = { ...parseZaiQuota(await fixture(second), at), at };
+    const theirs = coreLimits.detectEarlyResets(asCore(a, NOW), asCore(b, at), at).map(e => [e.windowId, e.usedBefore, e.usedAfter, e.reportedResetAtAfter, e.resetTimeKept]);
+    const result = observe(observe(emptyRecord(), a, NOW).record, b, at);
+    const ours = (result.events.find(e => e.kind === 'early-reset')?.early ?? []).map(e => [e.window, e.usedBefore, e.usedAfter, e.reportedResetAtAfter, e.resetTimeKept]);
+    assert.deepEqual(ours, theirs, `${first} → ${second}`);
+  }
 });

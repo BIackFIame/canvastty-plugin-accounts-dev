@@ -1003,6 +1003,11 @@ import { join as join2 } from "node:path";
 var STALE_MS = 30 * 6e4;
 var EXACT_MS = 10 * 6e4;
 var RESET_TOLERANCE_MS = 2 * 6e4;
+var EARLY_RESET_MIN_DROP = 5;
+var EARLY_RESET_NEAR_ZERO = 5;
+var EARLY_RESET_NOISE = 2;
+var EARLY_RESET_GRACE_MS = 5 * 6e4;
+var SAME_RESET_TIME_MS = 6e4;
 var LOW_PERCENT = 10;
 var ERROR_GRACE_MS = 2 * 6e4;
 var MAX_EVENTS = 12;
@@ -1030,17 +1035,16 @@ var pushEvent = (record, event) => {
 var time = (at) => new Date(at).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 function earlyResetOf(previous, next, now) {
   if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return null;
-  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return null;
+  if (now >= previous.resetsAt - EARLY_RESET_GRACE_MS) return null;
   const drop = previous.usedPercent - next.usedPercent;
-  if (drop <= 0) return null;
-  if (drop < Math.max(5, previous.usedPercent / 2) && !(next.usedPercent <= 5 && previous.usedPercent > 5)) return null;
+  if (!(drop >= Math.max(EARLY_RESET_MIN_DROP, previous.usedPercent / 2) || next.usedPercent <= EARLY_RESET_NEAR_ZERO && drop > EARLY_RESET_NOISE)) return null;
   return {
     window: next.id,
     usedBefore: previous.usedPercent,
     usedAfter: next.usedPercent,
     announcedResetAt: previous.resetsAt,
     reportedResetAtAfter: next.resetsAt,
-    resetTimeKept: next.resetsAt !== null && Math.abs(next.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS
+    resetTimeKept: next.resetsAt !== null && Math.abs(next.resetsAt - previous.resetsAt) <= SAME_RESET_TIME_MS
   };
 }
 var earlyNote = (detail, label) => `${label}: ${Math.round(detail.usedBefore)}% \u2192 ${Math.round(detail.usedAfter)}% before ${time(detail.announcedResetAt)}${detail.resetTimeKept ? " (the old reset time is still shown)" : detail.reportedResetAtAfter ? `, next reset ${time(detail.reportedResetAtAfter)}` : ""}`;

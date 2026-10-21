@@ -101,6 +101,15 @@ export const STALE_MS = 30 * 60_000;
 export const EXACT_MS = 10 * 60_000;
 /** Clock skew and reporting jitter tolerated around a reset time. */
 export const RESET_TOLERANCE_MS = 2 * 60_000;
+/** Early reset (the owner's rule, as CanvasTTY's core detects it): a drop of the used share by at least
+ *  max(EARLY_RESET_MIN_DROP, half of what was used), or to EARLY_RESET_NEAR_ZERO % or less by more than
+ *  EARLY_RESET_NOISE points, while the announced reset is more than EARLY_RESET_GRACE_MS away. */
+export const EARLY_RESET_MIN_DROP = 5;
+export const EARLY_RESET_NEAR_ZERO = 5;
+export const EARLY_RESET_NOISE = 2;
+export const EARLY_RESET_GRACE_MS = 5 * 60_000;
+/** A reported reset time within this of the announced one is the same (the old time kept). */
+export const SAME_RESET_TIME_MS = 60_000;
 /** Below this percentage left the account is `low` (still offered). */
 export const LOW_PERCENT = 10;
 /** A read this soon after a limit error does not clear it (the provider's counters may lag). */
@@ -122,19 +131,20 @@ const time = (at: number): string => new Date(at).toISOString().slice(0, 16).rep
 
 /**
  * Did this window reset before the time the previous read announced? Yes when its used share dropped substantially
- * — by at least max(5 points, half of what was used), or down to 5 % or less — while that time was still ahead,
+ * — by at least max(5 points, half of what was used), or down to 5 % or less by more than 2 points — while that time
+ * was still more than 5 minutes ahead,
  * whatever the provider reports as the next reset afterwards (a fresh window, or still the old time). A reset time
  * that moves without a drop is not a reset; a small dip (a rolling window shedding old use) is not one either.
  */
 export function earlyResetOf(previous: QuotaWindow, next: QuotaWindow, now: number): EarlyResetDetail | null {
   if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return null;
-  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return null;
+  // Same thresholds as CanvasTTY's own detector (LimitsService.detectEarlyResets).
+  if (now >= previous.resetsAt - EARLY_RESET_GRACE_MS) return null;
   const drop = previous.usedPercent - next.usedPercent;
-  if (drop <= 0) return null;
-  if (drop < Math.max(5, previous.usedPercent / 2) && !(next.usedPercent <= 5 && previous.usedPercent > 5)) return null;
+  if (!(drop >= Math.max(EARLY_RESET_MIN_DROP, previous.usedPercent / 2) || (next.usedPercent <= EARLY_RESET_NEAR_ZERO && drop > EARLY_RESET_NOISE))) return null;
   return {
     window: next.id, usedBefore: previous.usedPercent, usedAfter: next.usedPercent, announcedResetAt: previous.resetsAt,
-    reportedResetAtAfter: next.resetsAt, resetTimeKept: next.resetsAt !== null && Math.abs(next.resetsAt - previous.resetsAt) <= RESET_TOLERANCE_MS
+    reportedResetAtAfter: next.resetsAt, resetTimeKept: next.resetsAt !== null && Math.abs(next.resetsAt - previous.resetsAt) <= SAME_RESET_TIME_MS
   };
 }
 
