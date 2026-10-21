@@ -235,3 +235,58 @@ test('over JSON-RPC: a pool account is added, its sign-in card opens through ses
   assert.ok(calls.includes('sessions.subscribe'));
   assert.deepEqual(storage.pools.accounts.map(account => account.id), [added.id]);
 });
+
+test('through CanvasTTY\'s own supervisor and launch pipeline: a pool sign-in card and pool launches get the account home (CANVASTTY_REPO)', { skip: !process.env.CANVASTTY_REPO }, async (t) => {
+  const repo = process.env.CANVASTTY_REPO;
+  const { LaunchPipeline } = await import(join(repo, 'src/main/services/LaunchPipeline.ts'));
+  const { PluginServiceSupervisor } = await import(join(repo, 'src/main/services/PluginServiceSupervisor.ts'));
+  const { validatePluginManifest } = await import(join(repo, 'src/main/services/PluginManager.ts'));
+  const checked = validatePluginManifest(manifest);
+  const storage = {};
+  const created = [];
+  const dataDir = join(base, 'core-pools-data');
+  const supervisor = new PluginServiceSupervisor({
+    command: process.execPath, hostVersion: '9.9.9', locale: () => 'en', stopGraceMs: 300,
+    host: {
+      storageGet: async (_plugin, key) => storage[key] ?? null, storageSet: async (_plugin, key, value) => { storage[key] = value; }, emit: () => undefined,
+      sessions: (_plugin, _service, method, params) => {
+        if (method === 'sessions.subscribe') return { sessions: [] };
+        if (method === 'sessions.create') { created.push(params); return { sessionId: `card-${created.length}` }; }
+        return undefined;
+      }
+    }
+  });
+  t.after(() => supervisor.dispose());
+  const entryPath = join(root, 'services', 'accounts.mjs');
+  await supervisor.sync([{ pluginId: checked.id, serviceId: 'accounts', root, entryPath, sha256: createHash('sha256').update(readFileSync(entryPath)).digest('hex'),
+    dataDir, permissions: checked.permissions }]);
+  const pipeline = new LaunchPipeline({
+    contributors: () => [{ pluginId: checked.id, pluginName: checked.name, serviceId: 'accounts', launch: checked.services[0].launch, secrets: true, dataDir }],
+    call: (pluginId, serviceId, method, params, timeoutMs) => supervisor.hostCall(pluginId, serviceId, method, params, timeoutMs),
+    secret: async () => null,
+    runsRoot: join(base, 'runs-pools')
+  });
+  const added = await supervisor.request(checked.id, 'accounts', 'poolAdd', { provider: 'kimi', label: 'Kimi 1', trust: 'D2' });
+  assert.deepEqual(added.signIn, { sessionId: 'card-1' });
+  const home = join(dataDir, 'pools', added.id);
+  const signInOptions = pipeline.normalizeOptions('kimi', created[0].launchOptions);
+  const signIn = await pipeline.prepare({ sessionId: 'card-1', provider: 'kimi', profile: 'normal', role: 'agent', cwd: project, restoring: false, resume: false, environment: null, options: signInOptions });
+  assert.equal(signIn.ok, true, signIn.reason);
+  assert.equal(signIn.env.KIMI_CODE_HOME, home);
+  // A core that knows Kimi Code's home variable registers it as the launch's account home (isolation reopens it).
+  const registers = readFileSync(join(repo, 'src/main/services/LaunchPipeline.ts'), 'utf8').includes('contributedAccountHome');
+  if (registers) assert.equal(signIn.accountHome, readFileSync(join(repo, 'src/main/services/isolation/isolationPaths.ts'), 'utf8').includes('"KIMI_CODE_HOME"') ? home : undefined);
+  await signIn.cleanup();
+  // The CLI's sign-in writes its credential into the home (simulated); the card ends.
+  mkdirSync(join(home, 'credentials'), { recursive: true });
+  writeFileSync(join(home, 'credentials', 'kimi-code.json'), '{}', { mode: 0o600 });
+  assert.equal(supervisor.notify(checked.id, 'accounts', 'canvastty.sessions.event', { type: 'closed', session: { id: 'card-1' } }), true);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  // An orchestrator's pool choice reaches the plugin (delegable), and the pool picks the account.
+  assert.deepEqual((await pipeline.fieldOptions(checked.id, 'kimi')).account.map(option => option.value), ['pool:kimi', `sub:${added.id}`]);
+  const delegated = pipeline.normalizeOptions('kimi', { [checked.id]: { account: 'pool:kimi' } }, { delegated: true });
+  const launch = await pipeline.prepare({ sessionId: 'sub-1', provider: 'kimi', profile: 'normal', role: 'subagent', cwd: project, restoring: false, resume: false, environment: null, options: delegated });
+  assert.equal(launch.ok, true, launch.reason);
+  assert.equal(launch.env.KIMI_CODE_HOME, home);
+  await launch.cleanup();
+});
