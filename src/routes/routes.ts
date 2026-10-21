@@ -18,17 +18,22 @@ export type RouteState = 'ready' | 'no-key' | 'key-for-other-address' | 'ollama-
   /** An OpenRouter account: OpenRouter is for the Assistant's Jev decisions only, never a subagent's model traffic. */
   | 'decisions-only'
   /** The provider's quota for the account is used up until `quota.resetsAt` (read from the provider, or its limit error). */
-  | 'quota-exhausted';
+  | 'quota-exhausted'
+  /** A subscription pool account: not signed in, its sign-in expired, or a card already runs on it (one per sign-in). */
+  | 'signed-out' | 'busy'
+  /** A pool account below the task's data class, with the person's strict data checks. */
+  | 'data-class';
 
 /** Accounts probed at once (keys through the host, Ollama servers over loopback). */
 const PROBE_CONCURRENCY = 4;
 
 export interface RouteRow {
-  provider: Harness;
+  provider: Harness | 'grok';
   agent: string;
   accountId: string;
   account: string;
-  kind: 'ollama' | 'ollama-cloud' | 'api-key';
+  /** `subscription`: one of the person's own sign-ins in a pool (pool:<agent> picks among them). */
+  kind: 'ollama' | 'ollama-cloud' | 'api-key' | 'subscription';
   model: string;
   /** Where requests go: a host name, never a key or a path with secrets. */
   endpoint: string;
@@ -38,6 +43,8 @@ export interface RouteRow {
   launchOptions?: Record<string, Record<string, string | boolean>>;
   /** The account's subscription quota, when this plugin can know it (unknown is never "used up"). */
   quota?: RouteQuota;
+  /** Pool accounts: the data level the person trusts the account with (`unset`: not chosen yet). */
+  trust?: string;
 }
 
 /** QuotaView as an orchestrator (and the Assistant's routing) reads it. */

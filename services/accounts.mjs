@@ -104,8 +104,8 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
       if (!send({ method: "event", params: { event, data } }, true)) host.log("warn", `Dropped a ${String(event).slice(0, 80)} event larger than the frame limit.`);
     }
   };
-  const record = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const errorText2 = (error) => error instanceof Error ? error.message : String(error);
+  const record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const errorText3 = (error) => error instanceof Error ? error.message : String(error);
   const track = (run) => {
     active++;
     return Promise.resolve().then(run).finally(() => {
@@ -133,13 +133,13 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
   const handle = (line) => {
     let message;
     try {
-      message = record(JSON.parse(line));
+      message = record2(JSON.parse(line));
     } catch {
       return;
     }
     const method = message.method;
     if (method === "canvastty.initialize") {
-      Promise.resolve().then(() => onInitialize?.(record(message.params), host)).catch((error2) => host.log("error", `initialize failed: ${errorText2(error2)}`));
+      Promise.resolve().then(() => onInitialize?.(record2(message.params), host)).catch((error2) => host.log("error", `initialize failed: ${errorText3(error2)}`));
       return;
     }
     if (method === "canvastty.shutdown") {
@@ -153,7 +153,7 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
         return;
       }
       const handler = Object.hasOwn(notifications, method) ? notifications[method] : void 0;
-      track(() => handler?.(record(message.params), host)).catch((error2) => host.log("warn", `${method}: ${errorText2(error2)}`));
+      track(() => handler?.(record2(message.params), host)).catch((error2) => host.log("warn", `${method}: ${errorText3(error2)}`));
       return;
     }
     if (typeof method === "string") {
@@ -164,12 +164,12 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
       const handler = Object.hasOwn(methods, method) ? methods[method] : void 0;
       track(() => {
         if (!handler) throw Object.assign(new Error(`Unknown method: ${method}`), { code: -32601 });
-        return handler(record(message.params), host);
+        return handler(record2(message.params), host);
       }).then(
         (result) => {
           if (!send({ id: message.id, result: result ?? null })) send({ id: message.id, error: { code: -32e3, message: "The answer is larger than the frame limit." } });
         },
-        (error2) => send({ id: message.id, error: { code: error2?.code ?? -32e3, message: errorText2(error2).slice(0, 400) } })
+        (error2) => send({ id: message.id, error: { code: error2?.code ?? -32e3, message: errorText3(error2).slice(0, 400) } })
       );
       return;
     }
@@ -177,7 +177,7 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
     if (!waiter) return;
     pending.delete(message.id);
     clearTimeout(waiter.timer);
-    const error = record(message.error);
+    const error = record2(message.error);
     if (message.error) waiter.reject(new Error(typeof error.message === "string" ? error.message : "Host request failed."));
     else waiter.resolve(message.result);
   };
@@ -1028,9 +1028,9 @@ var emptyRecord = () => ({
   lastUseAt: null,
   events: []
 });
-var pushEvent = (record, event) => {
-  record.events.push(event);
-  if (record.events.length > MAX_EVENTS) record.events.splice(0, record.events.length - MAX_EVENTS);
+var pushEvent = (record2, event) => {
+  record2.events.push(event);
+  if (record2.events.length > MAX_EVENTS) record2.events.splice(0, record2.events.length - MAX_EVENTS);
 };
 var time = (at) => new Date(at).toISOString().slice(0, 16).replace("T", " ") + " UTC";
 function earlyResetOf(previous, next, now) {
@@ -1050,28 +1050,28 @@ function earlyResetOf(previous, next, now) {
 var earlyNote = (detail, label) => `${label}: ${Math.round(detail.usedBefore)}% \u2192 ${Math.round(detail.usedAfter)}% before ${time(detail.announcedResetAt)}${detail.resetTimeKept ? " (the old reset time is still shown)" : detail.reportedResetAtAfter ? `, next reset ${time(detail.reportedResetAtAfter)}` : ""}`;
 var modelWindows = (windows) => windows.filter((window) => window.models && window.usedPercent !== null);
 function observe(current, observation, now) {
-  const record = structuredClone(current);
+  const record2 = structuredClone(current);
   const events = [];
   const add = (kind, note, early2) => {
     const event = { at: now, kind, note, ...early2?.length ? { early: early2 } : {} };
     events.push(event);
-    pushEvent(record, event);
+    pushEvent(record2, event);
   };
-  const wasExhausted = record.exhaustedOpen || record.exhaustedUntil !== null;
-  const predicted = record.exhaustedUntil;
+  const wasExhausted = record2.exhaustedOpen || record2.exhaustedUntil !== null;
+  const predicted = record2.exhaustedUntil;
   if (observation.exhausted) {
     const until = observation.exhausted.until !== null && observation.exhausted.until > now ? observation.exhausted.until : null;
-    record.exhaustedUntil = until;
-    record.exhaustedOpen = until === null;
-    record.exhaustedAt = now;
-    record.exhaustedByError = true;
+    record2.exhaustedUntil = until;
+    record2.exhaustedOpen = until === null;
+    record2.exhaustedAt = now;
+    record2.exhaustedByError = true;
     if (!wasExhausted) add("exhausted", `limit error ${observation.exhausted.code}${until ? `, resets ${time(until)}${observation.exhausted.zoneGuessed ? " (time zone assumed)" : ""}` : ", no reset time given"}`);
-    record.source = record.source ?? observation.source;
-    return { record, events };
+    record2.source = record2.source ?? observation.source;
+    return { record: record2, events };
   }
   const windows = observation.windows.slice(0, MAX_WINDOWS);
-  const errorBase = wasExhausted && record.exhaustedByError && predicted !== null;
-  const previous = new Map(record.windows.map((window) => [window.id, errorBase && window.models ? { ...window, usedPercent: 100, resetsAt: predicted } : window]));
+  const errorBase = wasExhausted && record2.exhaustedByError && predicted !== null;
+  const previous = new Map(record2.windows.map((window) => [window.id, errorBase && window.models ? { ...window, usedPercent: 100, resetsAt: predicted } : window]));
   const early = [];
   const notes = [];
   for (const window of windows) {
@@ -1083,38 +1083,38 @@ function observe(current, observation, now) {
     }
   }
   const full = modelWindows(windows).filter((window) => window.usedPercent >= 100);
-  record.observedAt = observation.at;
-  record.source = observation.source;
-  record.windows = windows;
-  record.plan = observation.plan ?? record.plan;
-  record.lastError = null;
-  record.failures = 0;
-  record.launchesSinceRead = 0;
+  record2.observedAt = observation.at;
+  record2.source = observation.source;
+  record2.windows = windows;
+  record2.plan = observation.plan ?? record2.plan;
+  record2.lastError = null;
+  record2.failures = 0;
+  record2.launchesSinceRead = 0;
   if (full.length) {
     const resets = full.map((window) => window.resetsAt).filter((at) => at !== null && at > now);
     const until = resets.length === full.length ? Math.max(...resets) : null;
-    record.exhaustedUntil = until;
-    record.exhaustedOpen = until === null;
-    record.exhaustedByError = false;
+    record2.exhaustedUntil = until;
+    record2.exhaustedOpen = until === null;
+    record2.exhaustedByError = false;
     if (!wasExhausted) {
-      record.exhaustedAt = now;
+      record2.exhaustedAt = now;
       add("exhausted", `${full.map((window) => window.label).join(", ")} at 100%${until ? `, resets ${time(until)}` : ""}`);
     }
-    return { record, events };
+    return { record: record2, events };
   }
-  if (wasExhausted && record.exhaustedByError && record.exhaustedAt !== null && now - record.exhaustedAt < ERROR_GRACE_MS) return { record, events };
+  if (wasExhausted && record2.exhaustedByError && record2.exhaustedAt !== null && now - record2.exhaustedAt < ERROR_GRACE_MS) return { record: record2, events };
   if (wasExhausted) {
-    record.exhaustedByError = false;
-    record.exhaustedUntil = null;
-    record.exhaustedOpen = false;
-    record.exhaustedAt = null;
+    record2.exhaustedByError = false;
+    record2.exhaustedUntil = null;
+    record2.exhaustedOpen = false;
+    record2.exhaustedAt = null;
     if (early.length) add("early-reset", notes.join("; "), early);
     else if (predicted !== null && now >= predicted - RESET_TOLERANCE_MS) add("reset", `reset as predicted (${time(predicted)})`);
     else add("recovered", predicted !== null ? `some room again before ${time(predicted)}` : "room again");
-    return { record, events };
+    return { record: record2, events };
   }
   if (early.length) add("early-reset", notes.join("; "), early);
-  return { record, events };
+  return { record: record2, events };
 }
 function readFailed(current, error, now) {
   return { ...structuredClone(current), lastAttemptAt: now, failures: current.failures + 1, lastError: error.slice(0, 160) };
@@ -1122,38 +1122,38 @@ function readFailed(current, error, now) {
 function used(current, now) {
   return { ...structuredClone(current), lastUseAt: now, launchesSinceRead: Math.min(current.launchesSinceRead + 1, 999) };
 }
-function viewOf(record, now) {
-  const age = record.observedAt === null ? null : Math.max(0, Math.round((now - record.observedAt) / 6e4));
-  const base = { source: record.source, observedAt: record.observedAt, ageMinutes: age, launchesSinceRead: record.launchesSinceRead };
-  if (record.exhaustedUntil !== null && record.exhaustedUntil > now) {
-    return { ...base, state: "exhausted", remainingPercent: 0, window: null, resetsAt: record.exhaustedUntil, confidence: "exact", note: `used up; resets ${time(record.exhaustedUntil)}` };
+function viewOf(record2, now) {
+  const age = record2.observedAt === null ? null : Math.max(0, Math.round((now - record2.observedAt) / 6e4));
+  const base = { source: record2.source, observedAt: record2.observedAt, ageMinutes: age, launchesSinceRead: record2.launchesSinceRead };
+  if (record2.exhaustedUntil !== null && record2.exhaustedUntil > now) {
+    return { ...base, state: "exhausted", remainingPercent: 0, window: null, resetsAt: record2.exhaustedUntil, confidence: "exact", note: `used up; resets ${time(record2.exhaustedUntil)}` };
   }
-  if (record.exhaustedUntil !== null) {
-    return { ...base, state: "presumed-reset", remainingPercent: null, window: null, resetsAt: record.exhaustedUntil, confidence: "estimated", note: "its reset time passed: probably reset, read again soon" };
+  if (record2.exhaustedUntil !== null) {
+    return { ...base, state: "presumed-reset", remainingPercent: null, window: null, resetsAt: record2.exhaustedUntil, confidence: "estimated", note: "its reset time passed: probably reset, read again soon" };
   }
-  if (record.exhaustedOpen) {
-    if (record.exhaustedAt !== null && now - record.exhaustedAt <= STALE_MS) return { ...base, state: "exhausted", remainingPercent: 0, window: null, resetsAt: null, confidence: "estimated", note: "used up; no reset time given, read again soon" };
+  if (record2.exhaustedOpen) {
+    if (record2.exhaustedAt !== null && now - record2.exhaustedAt <= STALE_MS) return { ...base, state: "exhausted", remainingPercent: 0, window: null, resetsAt: null, confidence: "estimated", note: "used up; no reset time given, read again soon" };
     return { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: "was used up with no reset time; not read since" };
   }
-  if (record.observedAt === null) return { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: record.lastError ? `not readable: ${record.lastError}` : "not read yet" };
-  if (now - record.observedAt > STALE_MS) return { ...base, state: "stale", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: `read ${age} min ago; counts as unknown${record.lastError ? ` (last read failed: ${record.lastError})` : ""}` };
+  if (record2.observedAt === null) return { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: record2.lastError ? `not readable: ${record2.lastError}` : "not read yet" };
+  if (now - record2.observedAt > STALE_MS) return { ...base, state: "stale", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: `read ${age} min ago; counts as unknown${record2.lastError ? ` (last read failed: ${record2.lastError})` : ""}` };
   let tight = null;
   let presumed = false;
-  for (const window of modelWindows(record.windows)) {
+  for (const window of modelWindows(record2.windows)) {
     if (window.resetsAt !== null && window.resetsAt <= now) {
       presumed = true;
       continue;
     }
     if (!tight || window.usedPercent > tight.usedPercent) tight = window;
   }
-  const confidence = now - record.observedAt <= EXACT_MS && record.launchesSinceRead === 0 ? "exact" : "estimated";
+  const confidence = now - record2.observedAt <= EXACT_MS && record2.launchesSinceRead === 0 ? "exact" : "estimated";
   if (!tight) {
     return presumed ? { ...base, state: "presumed-reset", remainingPercent: null, window: null, resetsAt: null, confidence: "estimated", note: "its windows probably reset since the last read" } : { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: "the provider gave no model windows" };
   }
   const remaining = Math.max(0, Math.round((100 - tight.usedPercent) * 10) / 10);
   const view = { ...base, remainingPercent: remaining, window: tight.label, resetsAt: tight.resetsAt, confidence };
   if (remaining <= 0) return { ...view, state: "exhausted", note: `${tight.label} used up${tight.resetsAt ? `; resets ${time(tight.resetsAt)}` : ""}` };
-  const note = `${tight.label}: ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ""}${record.launchesSinceRead ? `; ${record.launchesSinceRead} launch(es) since the read` : ""}`;
+  const note = `${tight.label}: ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ""}${record2.launchesSinceRead ? `; ${record2.launchesSinceRead} launch(es) since the read` : ""}`;
   if (presumed) return { ...view, state: "presumed-reset", note: `${note}; another window probably reset since the read` };
   return { ...view, state: remaining < LOW_PERCENT ? "low" : "ok", note };
 }
@@ -1175,49 +1175,49 @@ var SCHEDULE = Object.freeze({
   dormantAfterMs: 6 * 36e5,
   jitter: 0.15
 });
-function nextReadAt({ record, now, random }) {
-  const last = Math.max(record.observedAt ?? 0, record.lastAttemptAt ?? 0);
+function nextReadAt({ record: record2, now, random }) {
+  const last = Math.max(record2.observedAt ?? 0, record2.lastAttemptAt ?? 0);
   const jitter = (ms) => Math.round(ms * (1 + SCHEDULE.jitter * (random * 2 - 1)));
-  if (record.failures > 0) return last + jitter(Math.min(SCHEDULE.failureMaxMs, SCHEDULE.failureBaseMs * 2 ** Math.min(record.failures - 1, 10)));
-  if (record.observedAt === null) return now;
-  const view = viewOf(record, now);
+  if (record2.failures > 0) return last + jitter(Math.min(SCHEDULE.failureMaxMs, SCHEDULE.failureBaseMs * 2 ** Math.min(record2.failures - 1, 10)));
+  if (record2.observedAt === null) return now;
+  const view = viewOf(record2, now);
   let delay;
   if (view.state === "presumed-reset") delay = SCHEDULE.presumedMs;
   else if (view.state === "exhausted") delay = SCHEDULE.exhaustedMs;
-  else if (record.lastUseAt !== null && now - record.lastUseAt <= SCHEDULE.activeWindowMs) delay = SCHEDULE.activeMs;
-  else if (record.lastUseAt === null || now - record.lastUseAt > SCHEDULE.dormantAfterMs) delay = SCHEDULE.dormantMs;
+  else if (record2.lastUseAt !== null && now - record2.lastUseAt <= SCHEDULE.activeWindowMs) delay = SCHEDULE.activeMs;
+  else if (record2.lastUseAt === null || now - record2.lastUseAt > SCHEDULE.dormantAfterMs) delay = SCHEDULE.dormantMs;
   else delay = SCHEDULE.idleMs;
   let at = last + jitter(delay);
-  const resets = [record.exhaustedUntil, ...record.windows.filter((window) => window.models).map((window) => window.resetsAt)].filter((reset) => reset !== null && reset > now && reset - now <= SCHEDULE.nearResetMs);
+  const resets = [record2.exhaustedUntil, ...record2.windows.filter((window) => window.models).map((window) => window.resetsAt)].filter((reset) => reset !== null && reset > now && reset - now <= SCHEDULE.nearResetMs);
   if (resets.length) at = Math.min(at, Math.min(...resets) + SCHEDULE.afterResetMs + Math.round(random * 1e4));
   return Math.max(at, last + SCHEDULE.minMs);
 }
 var num = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
 var text = (value, max) => typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
-var SOURCES = ["zai-quota-api", "zai-limit-error", "host-activity"];
+var SOURCES = ["zai-quota-api", "zai-limit-error", "host-activity", "core-limits"];
 function loadRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value;
-  const record = emptyRecord();
-  record.observedAt = num(raw.observedAt);
-  record.source = SOURCES.find((source) => source === raw.source) ?? null;
-  record.plan = text(raw.plan, 60);
-  record.exhaustedUntil = num(raw.exhaustedUntil);
-  record.exhaustedOpen = raw.exhaustedOpen === true;
-  record.exhaustedAt = num(raw.exhaustedAt);
-  record.exhaustedByError = raw.exhaustedByError === true;
-  record.lastAttemptAt = num(raw.lastAttemptAt);
-  record.failures = Math.max(0, Math.min(num(raw.failures) ?? 0, 50));
-  record.lastError = text(raw.lastError, 160);
-  record.launchesSinceRead = Math.max(0, Math.min(num(raw.launchesSinceRead) ?? 0, 999));
-  record.lastUseAt = num(raw.lastUseAt);
+  const record2 = emptyRecord();
+  record2.observedAt = num(raw.observedAt);
+  record2.source = SOURCES.find((source) => source === raw.source) ?? null;
+  record2.plan = text(raw.plan, 60);
+  record2.exhaustedUntil = num(raw.exhaustedUntil);
+  record2.exhaustedOpen = raw.exhaustedOpen === true;
+  record2.exhaustedAt = num(raw.exhaustedAt);
+  record2.exhaustedByError = raw.exhaustedByError === true;
+  record2.lastAttemptAt = num(raw.lastAttemptAt);
+  record2.failures = Math.max(0, Math.min(num(raw.failures) ?? 0, 50));
+  record2.lastError = text(raw.lastError, 160);
+  record2.launchesSinceRead = Math.max(0, Math.min(num(raw.launchesSinceRead) ?? 0, 999));
+  record2.lastUseAt = num(raw.lastUseAt);
   if (Array.isArray(raw.windows)) for (const entry of raw.windows.slice(0, MAX_WINDOWS)) {
     if (!entry || typeof entry !== "object") continue;
     const w = entry;
     const id = text(w.id, 60);
     const label = text(w.label, 40);
     if (!id || !label) continue;
-    record.windows.push({ id, label, usedPercent: num(w.usedPercent), used: num(w.used), limit: num(w.limit), windowMinutes: num(w.windowMinutes), resetsAt: num(w.resetsAt), models: w.models !== false });
+    record2.windows.push({ id, label, usedPercent: num(w.usedPercent), used: num(w.used), limit: num(w.limit), windowMinutes: num(w.windowMinutes), resetsAt: num(w.resetsAt), models: w.models !== false });
   }
   if (Array.isArray(raw.events)) for (const entry of raw.events.slice(-MAX_EVENTS)) {
     if (!entry || typeof entry !== "object") continue;
@@ -1234,9 +1234,9 @@ function loadRecord(value) {
       const announced = num(d.announcedResetAt);
       return window && before !== null && after !== null && announced !== null ? [{ window, usedBefore: before, usedAfter: after, announcedResetAt: announced, reportedResetAtAfter: num(d.reportedResetAtAfter), resetTimeKept: d.resetTimeKept === true }] : [];
     }) : [];
-    if (at !== null && note !== null && kind) record.events.push({ at, kind, note, ...early.length ? { early } : {} });
+    if (at !== null && note !== null && kind) record2.events.push({ at, kind, note, ...early.length ? { early } : {} });
   }
-  return record;
+  return record2;
 }
 
 // src/quota/zai.ts
@@ -1399,10 +1399,10 @@ var QuotaReader = class {
       const saved = JSON.parse(readFileSync(this.file, "utf8"));
       if (saved.version === 1 && saved.accounts && typeof saved.accounts === "object") {
         for (const [id, value] of Object.entries(saved.accounts).slice(0, 64)) {
-          const record = loadRecord(value);
+          const record2 = loadRecord(value);
           const url = saved.urls && typeof saved.urls === "object" ? saved.urls[id] : null;
-          if (record && /^[a-z0-9][a-z0-9-]{0,39}$/u.test(id)) {
-            this.records.set(id, record);
+          if (record2 && /^[a-z0-9][a-z0-9-]{0,39}$/u.test(id)) {
+            this.records.set(id, record2);
             if (typeof url === "string" && url.length < 200) this.urls.set(id, url);
           }
         }
@@ -1443,17 +1443,17 @@ var QuotaReader = class {
     }
     return this.records.get(account.id) ?? emptyRecord();
   }
-  set(id, record) {
-    this.records.set(id, record);
-    this.due.set(id, nextReadAt({ record, now: this.now(), random: this.random() }));
+  set(id, record2) {
+    this.records.set(id, record2);
+    this.due.set(id, nextReadAt({ record: record2, now: this.now(), random: this.random() }));
     this.save();
   }
   /** The quota of an account as routes show it; null when this plugin has no way to know it. */
   view(account) {
     const url = quotaUrlOf(account);
-    const record = this.urls.get(account.id) === (url ?? untracked(account.id)) ? this.records.get(account.id) : void 0;
-    if (!record) return url ? viewOf(emptyRecord(), this.now()) : null;
-    return viewOf(record, this.now());
+    const record2 = this.urls.get(account.id) === (url ?? untracked(account.id)) ? this.records.get(account.id) : void 0;
+    if (!record2) return url ? viewOf(emptyRecord(), this.now()) : null;
+    return viewOf(record2, this.now());
   }
   events(accountId) {
     return [...this.records.get(accountId)?.events ?? []];
@@ -1498,9 +1498,9 @@ var QuotaReader = class {
     for (const account of accounts) {
       const url = quotaUrlOf(account);
       if (!url) continue;
-      const record = this.record(account, url);
-      const last = Math.max(record.observedAt ?? 0, record.lastAttemptAt ?? 0);
-      if (now - last > DEMAND_REFRESH_MS && record.failures === 0) this.due.set(account.id, now);
+      const record2 = this.record(account, url);
+      const last = Math.max(record2.observedAt ?? 0, record2.lastAttemptAt ?? 0);
+      if (now - last > DEMAND_REFRESH_MS && record2.failures === 0) this.due.set(account.id, now);
     }
     void this.tick();
   }
@@ -1521,8 +1521,8 @@ var QuotaReader = class {
     for (const { account, url } of list) {
       if (this.inFlight.size >= MAX_CONCURRENT) break;
       if (this.inFlight.has(account.id)) continue;
-      const record = this.record(account, url);
-      const at = this.due.get(account.id) ?? nextReadAt({ record, now, random: this.random() });
+      const record2 = this.record(account, url);
+      const at = this.due.get(account.id) ?? nextReadAt({ record: record2, now, random: this.random() });
       if (!this.due.has(account.id)) this.due.set(account.id, at);
       if (at > now) continue;
       waiting.push(this.read(account, url));
@@ -1534,8 +1534,8 @@ var QuotaReader = class {
     const running = this.inFlight.get(account.id);
     if (running) return running;
     const now = this.now();
-    const record = this.record(account, url);
-    const last = Math.max(record.observedAt ?? 0, record.lastAttemptAt ?? 0);
+    const record2 = this.record(account, url);
+    const last = Math.max(record2.observedAt ?? 0, record2.lastAttemptAt ?? 0);
     const hour = (this.reads.get(account.id) ?? []).filter((at) => now - at < 36e5);
     if (now - last < SCHEDULE.minMs || hour.length >= MAX_READS_PER_HOUR) {
       this.due.set(account.id, Math.max(last + SCHEDULE.minMs, hour.length >= MAX_READS_PER_HOUR ? hour[0] + 36e5 : 0));
@@ -1629,8 +1629,795 @@ var QuotaReader = class {
   }
 };
 
+// src/pools/service.ts
+import { randomBytes, randomUUID as randomUUID3 } from "node:crypto";
+import { readFileSync as readFileSync2 } from "node:fs";
+import { mkdir as mkdir3, readFile as readFile2, readdir, rename as rename3, rm as rm3, stat, writeFile as writeFile3 } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join as join3 } from "node:path";
+
+// src/pools/providers.ts
+var POOL_PROVIDERS = ["claude", "codex", "grok", "kimi"];
+var POOL_INFO = Object.freeze({
+  claude: {
+    label: "Claude Code",
+    homeVariable: "CLAUDE_CONFIG_DIR",
+    env: {},
+    // Linux and Windows (and a macOS Keychain fallback); on macOS the sign-in is a Keychain entry keyed to the folder,
+    // so the core's limits read (or Claude's own .claude.json account marker) tells.
+    credentialFiles: [".credentials.json"],
+    limits: true,
+    limitsReadRefreshes: false,
+    perHome: "one",
+    signIn: { en: "Claude Code starts its first-run setup: choose a theme, then sign in with your Claude account in the browser (or type /login).", ru: "Claude Code \u043D\u0430\u0447\u043D\u0451\u0442 \u043F\u0435\u0440\u0432\u0443\u044E \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0443: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u0435\u043C\u0443 \u0438 \u0432\u043E\u0439\u0434\u0438\u0442\u0435 \u0441\u0432\u043E\u0435\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u044C\u044E Claude \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 (\u0438\u043B\u0438 \u043D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login)." }
+  },
+  codex: {
+    label: "Codex",
+    homeVariable: "CODEX_HOME",
+    env: { CODEX_API_KEY: "", CODEX_ACCESS_TOKEN: "" },
+    credentialFiles: ["auth.json"],
+    limits: true,
+    limitsReadRefreshes: true,
+    perHome: "one",
+    signIn: { en: 'Codex shows its sign-in screen: choose "Sign in with ChatGPT" and finish in the browser.', ru: "Codex \u043F\u043E\u043A\u0430\u0436\u0435\u0442 \u044D\u043A\u0440\u0430\u043D \u0432\u0445\u043E\u0434\u0430: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \xABSign in with ChatGPT\xBB \u0438 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
+  },
+  grok: {
+    label: "Grok",
+    homeVariable: "GROK_HOME",
+    env: {},
+    credentialFiles: ["auth.json"],
+    limits: true,
+    limitsReadRefreshes: false,
+    perHome: "one",
+    signIn: { en: "Grok opens the browser to sign in at grok.com (password or Google).", ru: "Grok \u043E\u0442\u043A\u0440\u043E\u0435\u0442 \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u0434\u043B\u044F \u0432\u0445\u043E\u0434\u0430 \u043D\u0430 grok.com (\u043F\u0430\u0440\u043E\u043B\u044C \u0438\u043B\u0438 Google)." }
+  },
+  kimi: {
+    label: "Kimi",
+    homeVariable: "KIMI_CODE_HOME",
+    env: {},
+    // CanvasTTY reads a Kimi home through one `kimi web` started there, which may refresh the sign-in.
+    credentialFiles: [],
+    credentialFolder: "credentials",
+    limits: true,
+    limitsReadRefreshes: true,
+    perHome: "one",
+    signIn: { en: "Type /login in Kimi and choose Kimi Code (OAuth); finish in the browser.", ru: "\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login \u0432 Kimi \u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 Kimi Code (OAuth); \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
+  }
+});
+var NOT_POOLED = Object.freeze({
+  qwen: "Qwen Code has no variable that moves its home (its sign-in is always ~/.qwen), and the Qwen OAuth free tier closed on 2026-04-15.",
+  opencode: "OpenCode Go signs in with an API key, not a browser sign-in: add it as a model account with its key."
+});
+var isPoolProvider = (value) => typeof value === "string" && POOL_PROVIDERS.includes(value);
+
+// src/pools/model.ts
+var DATA_CLASSES = ["D0", "D1", "D2", "D3"];
+var RANK = Object.freeze({ D0: 0, D1: 1, D2: 2, D3: 3 });
+var MAX_POOL_ACCOUNTS = 1e3;
+var ID2 = /^[a-z0-9][a-z0-9-]{0,39}$/u;
+var plain = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
+function validatePoolAccount(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A pool account must be an object.");
+  const raw = value;
+  const unknown = Object.keys(raw).find((key) => !["id", "provider", "label", "trust", "addedAt"].includes(key));
+  if (unknown) throw new Error(`Unknown pool account field ${unknown.slice(0, 40)}.`);
+  if (typeof raw.id !== "string" || !ID2.test(raw.id)) throw new Error("Pool account id must be 1\u201340 lowercase letters, digits or dashes.");
+  if (!isPoolProvider(raw.provider)) throw new Error("Choose an agent for the pool account.");
+  if (!plain(raw.label, 80)) throw new Error("Give the account a name (at most 80 characters).");
+  if (raw.trust !== "unset" && !DATA_CLASSES.includes(raw.trust)) throw new Error("Choose how far you trust the account: not set, D0, D1, D2 or D3.");
+  const addedAt = typeof raw.addedAt === "number" && Number.isFinite(raw.addedAt) ? raw.addedAt : 0;
+  return { id: raw.id, provider: raw.provider, label: raw.label.trim(), trust: raw.trust, addedAt };
+}
+function loadPools(value) {
+  const list = value && typeof value === "object" && Array.isArray(value.accounts) ? value.accounts : [];
+  const accounts = [];
+  for (const entry of list.slice(0, MAX_POOL_ACCOUNTS)) {
+    try {
+      const account = validatePoolAccount(entry);
+      if (!accounts.some((existing) => existing.id === account.id)) accounts.push(account);
+    } catch {
+    }
+  }
+  return { version: 1, accounts };
+}
+function newPoolId(provider, label, taken) {
+  const slug = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 24);
+  const base = `${provider}-${slug || "account"}`.slice(0, 32).replace(/-+$/u, "");
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+var covers = (trust, dataClass) => trust !== "unset" && RANK[trust] >= RANK[dataClass];
+var tier = (view) => view.state === "low" ? 3 : view.confidence === "exact" ? 0 : view.confidence === "estimated" ? 1 : 2;
+var headroom = (view) => view.remainingPercent === null ? -1 : Math.floor(view.remainingPercent / 10);
+function rankPool(members, facts, request = {}) {
+  const mode = request.dataClass ? request.mode ?? "warn" : "off";
+  const ranked = [];
+  const skipped = [];
+  members.forEach((account, index) => {
+    const known = facts(account);
+    if (known.signIn === "signed-out") {
+      skipped.push({ account, reason: "not signed in (sign in again in the Accounts settings)" });
+      return;
+    }
+    if (known.signIn === "expired") {
+      skipped.push({ account, reason: "its sign-in expired (sign in again in the Accounts settings)" });
+      return;
+    }
+    if (known.quota.state === "exhausted") {
+      skipped.push({ account, reason: `its quota is used up (${known.quota.note})` });
+      return;
+    }
+    if (known.active > 0) {
+      skipped.push({ account, reason: "a card already runs on it (one card per sign-in, so its refresh token is not used twice)" });
+      return;
+    }
+    const covered = request.dataClass && mode !== "off" ? covers(account.trust, request.dataClass) : null;
+    if (covered === false && mode === "strict") {
+      skipped.push({ account, reason: account.trust === "unset" ? `the person has not set its data level; this task is ${request.dataClass}` : `trusted up to ${account.trust}; this task is ${request.dataClass}` });
+      return;
+    }
+    ranked.push({ account, facts: known, covers: covered, index, ...covered === false ? { note: `below this task's class ${request.dataClass} (${account.trust === "unset" ? "level not set" : `up to ${account.trust}`}); the person chose to be warned only` } : {} });
+  });
+  ranked.sort((a, b) => (mode === "warn" ? Number(a.covers === false) - Number(b.covers === false) : 0) || tier(a.facts.quota) - tier(b.facts.quota) || headroom(b.facts.quota) - headroom(a.facts.quota) || a.facts.active - b.facts.active || (a.facts.quota.resetsAt ?? Infinity) - (b.facts.quota.resetsAt ?? Infinity) || (a.facts.lastUsedAt ?? 0) - (b.facts.lastUsedAt ?? 0) || a.index - b.index);
+  return { ranked: ranked.map(({ index: _index, ...entry }) => entry), skipped };
+}
+
+// src/pools/service.ts
+var STORAGE_KEY = "pools";
+var POOL_STATE_FILE = "pools-state.json";
+var CORE_HOME_LIMIT = 32;
+var TICK_MS2 = 15e3;
+var MIN_READ_MS = 3 * 6e4;
+var MAX_CONCURRENT_READS = 2;
+var LIMITS_RETRY_MS = 30 * 6e4;
+var SIGN_IN_TTL_MS = 10 * 6e4;
+var RESERVATION_MS = 6e4;
+var WRITE_DELAY_MS2 = 500;
+var POOL_VALUE = "pool:";
+var MEMBER_VALUE = "sub:";
+var SIGN_IN_VALUE = "signin:";
+var errorText = (error) => error instanceof Error ? error.message : String(error);
+var refuse = (reason) => ({ refuse: { reason: reason.replace(/[\u0000-\u001f\u007f]+/gu, " ").slice(0, 240) } });
+var record = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+var emptyMember = () => ({ signIn: "unknown", signInCheckedAt: null, lastUsedAt: null, quota: emptyRecord(), limitsNote: null });
+async function probeSignIn(provider, home) {
+  const info = POOL_INFO[provider];
+  for (const file of info.credentialFiles) {
+    try {
+      if ((await stat(join3(home, file))).isFile()) return "signed-in";
+    } catch {
+    }
+  }
+  if (info.credentialFolder) {
+    try {
+      if ((await readdir(join3(home, info.credentialFolder))).length > 0) return "signed-in";
+    } catch {
+    }
+  }
+  if (provider === "claude") {
+    try {
+      const text2 = await readFile2(join3(home, ".claude.json"), "utf8");
+      if (text2.length < 4e6) {
+        const parsed = record(JSON.parse(text2));
+        if (parsed.oauthAccount && typeof parsed.oauthAccount === "object") return "signed-in";
+      }
+    } catch {
+    }
+  }
+  return "signed-out";
+}
+function limitsObservation(provider, answer) {
+  const snapshot = record(record(answer).snapshot);
+  const entry = (Array.isArray(snapshot.providers) ? snapshot.providers : []).map(record).find((item) => item.provider === provider);
+  if (!entry) return { kind: "failed", reason: "CanvasTTY gave no limits for this agent" };
+  const reason = typeof entry.reason === "string" ? entry.reason : "";
+  if (entry.state === "unavailable" || entry.state === "stale") {
+    if (reason === "not-authenticated") return { kind: "signed-out", reason: "not signed in" };
+    if (reason === "session-expired") return { kind: "expired", reason: "the sign-in expired" };
+    if (reason === "unsupported-protocol") return { kind: "unsupported", reason: "CanvasTTY cannot read this agent's quota for an account yet" };
+    return { kind: "failed", reason: reason ? `CanvasTTY could not read it (${reason.slice(0, 40)})` : "CanvasTTY could not read it" };
+  }
+  if (entry.state !== "available") return { kind: "failed", reason: "CanvasTTY gave an unknown limits state" };
+  const num2 = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+  const windows = [];
+  for (const raw of (Array.isArray(entry.windows) ? entry.windows : []).slice(0, 8).map(record)) {
+    const id = typeof raw.id === "string" ? raw.id.slice(0, 40) : null;
+    if (!id) continue;
+    const minutes = num2(raw.windowMinutes);
+    const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim().slice(0, 30) : minutes === null ? id : minutes % 1440 === 0 ? `${minutes / 1440}d` : minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
+    windows.push({ id: `${provider}:${id}`, label, usedPercent: num2(raw.usedPercent), used: num2(raw.used), limit: num2(raw.limit), windowMinutes: minutes, resetsAt: num2(raw.resetsAt), models: raw.isDefaultBucket !== false });
+  }
+  return { kind: "ok", at: num2(entry.fetchedAt) ?? num2(snapshot.fetchedAt) ?? Date.now(), windows };
+}
+var PoolService = class {
+  settings = { version: 1, accounts: [] };
+  host;
+  dataDir;
+  now;
+  random;
+  takenIds;
+  members = /* @__PURE__ */ new Map();
+  /** Session id -> pool account: the cards running on each sign-in (kept across restarts so a card resumes on its account). */
+  sessions = /* @__PURE__ */ new Map();
+  /** Sessions whose card is running now (released on exit or close). */
+  running = /* @__PURE__ */ new Set();
+  reservations = /* @__PURE__ */ new Map();
+  signIns = /* @__PURE__ */ new Map();
+  /** Sign-in cards: session id -> account. */
+  signInCards = /* @__PURE__ */ new Map();
+  due = /* @__PURE__ */ new Map();
+  inFlight = /* @__PURE__ */ new Map();
+  limits = { state: "unknown", retryAt: 0 };
+  /** Card events arrive (sessions.subscribe answered): only then can a running card be counted until it ends. */
+  cardEvents = false;
+  unread = false;
+  loading = null;
+  writes = Promise.resolve();
+  timer = null;
+  writeTimer = null;
+  writing = Promise.resolve();
+  file;
+  constructor(options) {
+    this.host = options.host;
+    this.dataDir = options.dataDir;
+    this.now = options.now ?? Date.now;
+    this.random = options.random ?? Math.random;
+    this.takenIds = options.takenIds ?? (() => /* @__PURE__ */ new Set());
+    this.unread = options.unread === true;
+    if (!this.unread) this.settings = loadPools(options.saved);
+    this.file = join3(options.dataDir, POOL_STATE_FILE);
+    try {
+      const saved = record(JSON.parse(readFileSync2(this.file, "utf8")));
+      if (saved.version === 1) {
+        for (const [id, value] of Object.entries(record(saved.members)).slice(0, MAX_POOL_ACCOUNTS)) {
+          const raw = record(value);
+          const quota = loadRecord(raw.quota);
+          const signIn = ["signed-in", "signed-out", "expired", "unknown"].find((entry) => entry === raw.signIn) ?? "unknown";
+          const num2 = (key) => typeof raw[key] === "number" && Number.isFinite(raw[key]) ? raw[key] : null;
+          this.members.set(id, { signIn, signInCheckedAt: num2("signInCheckedAt"), lastUsedAt: num2("lastUsedAt"), quota: quota ?? emptyRecord(), limitsNote: typeof raw.limitsNote === "string" ? raw.limitsNote.slice(0, 160) : null });
+        }
+        for (const [session, id] of Object.entries(record(saved.sessions)).slice(0, 4096)) if (typeof id === "string" && session.length <= 200) this.sessions.set(session, id);
+      }
+    } catch {
+    }
+  }
+  homeOf(id) {
+    return join3(this.dataDir, "pools", id);
+  }
+  find(id) {
+    return this.settings.accounts.find((account) => account.id === id);
+  }
+  member(id) {
+    let state = this.members.get(id);
+    if (!state) {
+      state = emptyMember();
+      this.members.set(id, state);
+    }
+    return state;
+  }
+  async load() {
+    if (!this.unread) return;
+    this.loading ??= this.host.callHost("storage.get", { key: STORAGE_KEY }).then((saved) => {
+      this.settings = loadPools(saved);
+      this.unread = false;
+    }).finally(() => {
+      this.loading = null;
+    });
+    try {
+      await this.loading;
+    } catch {
+      throw new Error("The saved pool accounts could not be read; nothing was changed. Try again.");
+    }
+  }
+  serialized(run) {
+    const next = this.writes.then(run, run);
+    this.writes = next.catch(() => void 0);
+    return next;
+  }
+  async persist(next) {
+    if (this.unread) throw new Error("The saved pool accounts could not be read; nothing was changed. Try again.");
+    await this.host.callHost("storage.set", { key: STORAGE_KEY, value: next });
+    this.settings = next;
+  }
+  // ---- start, sessions, limits notifications ----
+  /** Subscribes to card events (the one-card-per-sign-in rule and sign-in endings) and reads quotas on a timer. */
+  async start() {
+    try {
+      const answer = record(await this.host.callHost("sessions.subscribe", {}));
+      this.cardEvents = true;
+      this.sessionsKnown(answer.sessions);
+    } catch (error) {
+      this.host.log("warn", `pools: card events are not available (${errorText(error).slice(0, 120)}); the one-card-per-sign-in rule cannot be kept.`);
+    }
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        void this.tick();
+      }, TICK_MS2);
+      this.timer.unref?.();
+    }
+    void this.refreshSignIns();
+  }
+  async stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    await Promise.allSettled([...this.inFlight.values()]);
+    await this.flush();
+  }
+  /** The cards running now (from sessions.subscribe): everything else this plugin remembered as running has ended. */
+  sessionsKnown(list) {
+    const live = /* @__PURE__ */ new Set();
+    for (const entry of Array.isArray(list) ? list.map(record) : []) {
+      const session = record(entry);
+      const id = typeof session.id === "string" ? session.id : null;
+      if (id && session.exitCode === null && session.status !== "exited") live.add(id);
+    }
+    this.running.clear();
+    for (const id of this.sessions.keys()) if (live.has(id)) this.running.add(id);
+  }
+  /** `canvastty.sessions.event`. */
+  sessionEvent(params) {
+    const event = record(params);
+    const session = record(event.session);
+    const id = typeof session.id === "string" ? session.id : null;
+    if (!id || event.type !== "exited" && event.type !== "closed") return;
+    this.running.delete(id);
+    if (event.type === "closed") {
+      this.sessions.delete(id);
+      this.save();
+    }
+    const signInFor = this.signInCards.get(id);
+    if (signInFor) {
+      this.signInCards.delete(id);
+      void this.check(signInFor).catch(() => void 0);
+    }
+    this.host.emit("pools", { changed: true });
+  }
+  /** `canvastty.limits.changed` for one of this plugin's homes. */
+  limitsChanged(params) {
+    const values = record(params);
+    if (typeof values.home !== "string" || !isPoolProvider(values.provider)) return;
+    const account = this.settings.accounts.find((entry) => entry.provider === values.provider && this.homeOf(entry.id) === values.home);
+    if (account) this.applyLimits(account, values);
+  }
+  // ---- the settings page ----
+  view() {
+    const homes = this.settings.accounts.filter((account) => POOL_INFO[account.provider].limits).length;
+    return {
+      providers: POOL_PROVIDERS.map((provider) => ({
+        provider,
+        label: POOL_INFO[provider].label,
+        signInHint: POOL_INFO[provider].signIn,
+        accounts: this.settings.accounts.filter((account) => account.provider === provider).map((account) => this.memberView(account))
+      })),
+      notPooled: { ...NOT_POOLED },
+      limits: this.limits.state,
+      cardEvents: this.cardEvents,
+      homeLimit: { limit: CORE_HOME_LIMIT, over: homes > CORE_HOME_LIMIT }
+    };
+  }
+  memberView(account) {
+    const state = this.member(account.id);
+    return {
+      id: account.id,
+      provider: account.provider,
+      label: account.label,
+      trust: account.trust,
+      signIn: state.signIn,
+      running: this.runningOn(account.id),
+      lastUsedAt: state.lastUsedAt,
+      quota: routeQuota(viewOf(state.quota, this.now())),
+      limitsNote: state.limitsNote,
+      events: state.quota.events.slice(-5),
+      signingIn: [...this.signInCards.values()].includes(account.id)
+    };
+  }
+  /**
+   * «Add account»: the account, its own empty home, and a card with the CLI's own sign-in for it. The data level is
+   * the person's answer, asked on add: `unset` is a valid answer ("decide later"), a missing one is not.
+   */
+  async add(params) {
+    const values = record(params);
+    if (!isPoolProvider(values.provider)) throw new Error(values.provider && typeof values.provider === "string" && NOT_POOLED[values.provider] ? NOT_POOLED[values.provider] : "Choose Claude Code, Codex, Grok or Kimi.");
+    if (values.trust === void 0) throw new Error('Choose how far you trust this account (or "Not set" to decide later).');
+    const provider = values.provider;
+    const id = await this.serialized(async () => {
+      if (this.settings.accounts.length >= MAX_POOL_ACCOUNTS) throw new Error(`The pool list is full (${MAX_POOL_ACCOUNTS} accounts is the storage bound).`);
+      const label = typeof values.label === "string" && values.label.trim() ? values.label.trim() : `${POOL_INFO[provider].label} ${this.settings.accounts.filter((entry) => entry.provider === provider).length + 1}`;
+      const taken = /* @__PURE__ */ new Set([...this.takenIds(), ...this.settings.accounts.map((entry) => entry.id)]);
+      const account = validatePoolAccount({ id: newPoolId(provider, label, taken), provider, label, trust: values.trust, addedAt: this.now() });
+      await ensureHome(this.homeOf(account.id));
+      try {
+        await this.persist({ version: 1, accounts: [...this.settings.accounts, account] });
+      } catch (error) {
+        await rm3(this.homeOf(account.id), { recursive: true, force: true });
+        throw error;
+      }
+      this.members.set(account.id, { ...emptyMember(), signIn: "signed-out", signInCheckedAt: this.now() });
+      this.save();
+      return account.id;
+    });
+    let signIn;
+    try {
+      signIn = await this.signIn(id);
+    } catch (error) {
+      signIn = { error: errorText(error) };
+    }
+    return { id, signIn };
+  }
+  /** «Sign in»: a card running the CLI in the account's home; the CLI's own first run (or /login) signs it in. */
+  async signIn(accountId) {
+    const account = this.find(accountId);
+    if (!account) throw new Error("No such pool account.");
+    if (this.runningOn(account.id) > 0) throw new Error(`A card already runs on ${account.label}; close it before signing in again.`);
+    const home = await ensureHome(this.homeOf(account.id));
+    const nonce = randomBytes(12).toString("hex");
+    for (const [key, entry] of this.signIns) if (entry.expiresAt <= this.now() || entry.accountId === account.id) this.signIns.delete(key);
+    this.signIns.set(nonce, { accountId: account.id, expiresAt: this.now() + SIGN_IN_TTL_MS });
+    const answer = record(await this.host.callHost("sessions.create", {
+      provider: account.provider,
+      cwd: homedir() || home,
+      profile: "normal",
+      title: `Sign in \xB7 ${account.label}`.slice(0, 80),
+      launchOptions: { [PLUGIN_ID]: { account: `${SIGN_IN_VALUE}${account.id}:${nonce}`, effort: "default", trustFolder: false } }
+    }));
+    if (typeof answer.sessionId !== "string") throw new Error("CanvasTTY did not open the sign-in card.");
+    this.signInCards.set(answer.sessionId, account.id);
+    return { sessionId: answer.sessionId };
+  }
+  async update(params) {
+    const values = record(params);
+    return this.serialized(async () => {
+      const account = this.find(values.id);
+      if (!account) throw new Error("No such pool account.");
+      const next = validatePoolAccount({ ...account, ...values.label !== void 0 ? { label: values.label } : {}, ...values.trust !== void 0 ? { trust: values.trust } : {} });
+      await this.persist({ version: 1, accounts: this.settings.accounts.map((entry) => entry.id === next.id ? next : entry) });
+      return { saved: true };
+    });
+  }
+  /** «Remove»: the account and its whole home (its sign-in with it). Refused while a card runs on it. */
+  async remove(accountId) {
+    return this.serialized(async () => {
+      const account = this.find(accountId);
+      if (!account) throw new Error("No such pool account.");
+      if (this.runningOn(account.id) > 0) throw new Error(`A card still runs on ${account.label}; close it first.`);
+      await this.persist({ version: 1, accounts: this.settings.accounts.filter((entry) => entry.id !== account.id) });
+      this.members.delete(account.id);
+      this.due.delete(account.id);
+      this.reservations.delete(account.id);
+      for (const [session, id] of this.sessions) if (id === account.id) this.sessions.delete(session);
+      for (const [key, entry] of this.signIns) if (entry.accountId === account.id) this.signIns.delete(key);
+      await rm3(this.homeOf(account.id), { recursive: true, force: true });
+      this.save();
+      return { removed: true };
+    });
+  }
+  /** «Check»: the home's sign-in now, and its quota (bounded like every read). */
+  async check(accountId) {
+    const account = this.find(accountId);
+    if (!account) throw new Error("No such pool account.");
+    await this.probe(account);
+    if (POOL_INFO[account.provider].limits) await this.read(account, true);
+    return this.memberView(account);
+  }
+  async probe(account) {
+    const found = await probeSignIn(account.provider, this.homeOf(account.id));
+    const state = this.member(account.id);
+    if (!(found === "signed-in" && state.signIn === "expired")) state.signIn = found;
+    state.signInCheckedAt = this.now();
+    if (found === "signed-in") this.due.set(account.id, this.now());
+    this.save();
+  }
+  async refreshSignIns() {
+    for (const account of this.settings.accounts) await this.probe(account).catch(() => void 0);
+  }
+  // ---- quota ----
+  runningOn(accountId) {
+    let count = 0;
+    for (const session of this.running) if (this.sessions.get(session) === accountId) count++;
+    return count;
+  }
+  reserved(accountId) {
+    const now = this.now();
+    const list = (this.reservations.get(accountId) ?? []).filter((until) => until > now);
+    if (list.length) this.reservations.set(accountId, list);
+    else this.reservations.delete(accountId);
+    return list.length;
+  }
+  facts(account, except) {
+    const state = this.member(account.id);
+    let active = this.reserved(account.id);
+    for (const session of this.running) if (session !== except && this.sessions.get(session) === account.id) active++;
+    return { signIn: state.signIn, quota: viewOf(state.quota, this.now()), active, lastUsedAt: state.lastUsedAt };
+  }
+  /** Reads the homes that are due (the timer calls it; tests call it directly). */
+  async tick() {
+    if (this.limits.state === "no" && this.now() < this.limits.retryAt) return;
+    const waiting = [];
+    for (const account of this.settings.accounts) {
+      if (this.inFlight.size >= MAX_CONCURRENT_READS) break;
+      if (!POOL_INFO[account.provider].limits || this.inFlight.has(account.id)) continue;
+      const state = this.member(account.id);
+      if (state.signIn === "signed-out") continue;
+      const last = Math.max(state.quota.observedAt ?? 0, state.quota.lastAttemptAt ?? 0);
+      const at = this.due.get(account.id) ?? Math.max(nextReadAt({ record: state.quota, now: this.now(), random: this.random() }), last + MIN_READ_MS);
+      if (!this.due.has(account.id)) this.due.set(account.id, at);
+      if (at > this.now()) continue;
+      waiting.push(this.read(account, false));
+    }
+    await Promise.allSettled(waiting);
+  }
+  /** Accounts asked about now (list_routes, pick_account): read the ones whose data is old, in the background. */
+  demand(provider) {
+    for (const account of this.settings.accounts) {
+      if (provider && account.provider !== provider) continue;
+      const quota = this.member(account.id).quota;
+      if (this.now() - Math.max(quota.observedAt ?? 0, quota.lastAttemptAt ?? 0) > 10 * 6e4 && quota.failures === 0) this.due.set(account.id, this.now());
+    }
+    void this.tick();
+  }
+  read(account, now) {
+    const running = this.inFlight.get(account.id);
+    if (running) return running;
+    const state = this.member(account.id);
+    const last = Math.max(state.quota.observedAt ?? 0, state.quota.lastAttemptAt ?? 0);
+    if (!now && this.now() - last < MIN_READ_MS) return Promise.resolve();
+    if (POOL_INFO[account.provider].limitsReadRefreshes && this.runningOn(account.id) > 0) {
+      this.due.set(account.id, this.now() + MIN_READ_MS);
+      return Promise.resolve();
+    }
+    const run = this.request(account).finally(() => this.inFlight.delete(account.id));
+    this.inFlight.set(account.id, run);
+    return run;
+  }
+  async request(account) {
+    const state = this.member(account.id);
+    const started2 = this.now();
+    let answer;
+    try {
+      answer = await this.host.callHost("limits.get", { provider: account.provider, home: this.homeOf(account.id) });
+      this.limits = { state: "yes", retryAt: 0 };
+    } catch (error) {
+      const text2 = errorText(error);
+      if (/unknown (host )?method/iu.test(text2) || /does not have the (limits:read|launch:contribute) permission/iu.test(text2)) {
+        this.limits = { state: "no", retryAt: started2 + LIMITS_RETRY_MS };
+        state.limitsNote = /permission/iu.test(text2) ? "CanvasTTY lets this plugin read quotas only with the limits:read permission" : "this CanvasTTY cannot read quotas for account homes yet";
+      } else if (/at most \d+ account homes/iu.test(text2)) {
+        state.limitsNote = `CanvasTTY reads quotas for at most ${CORE_HOME_LIMIT} accounts per plugin; this one stays unknown`;
+      } else {
+        state.limitsNote = null;
+      }
+      state.quota = readFailed(state.quota, state.limitsNote ?? "CanvasTTY could not read the quota", started2);
+      this.due.set(account.id, Math.max(nextReadAt({ record: state.quota, now: started2, random: this.random() }), started2 + (this.limits.state === "no" ? LIMITS_RETRY_MS : MIN_READ_MS)));
+      this.save();
+      return;
+    }
+    this.applyLimits(account, answer);
+  }
+  applyLimits(account, answer) {
+    const state = this.member(account.id);
+    const now = this.now();
+    const result = limitsObservation(account.provider, answer);
+    if (result.kind === "ok") {
+      state.signIn = "signed-in";
+      state.signInCheckedAt = now;
+      state.limitsNote = null;
+      if (state.quota.observedAt !== null && result.at <= state.quota.observedAt) {
+        state.quota = { ...state.quota, lastAttemptAt: now };
+      } else {
+        const observed = observe(state.quota, { source: "core-limits", at: result.at, windows: result.windows }, now);
+        observed.record.lastAttemptAt = now;
+        state.quota = observed.record;
+        for (const event of observed.events) {
+          this.host.log(event.kind === "exhausted" ? "warn" : "info", `pool ${account.id}: ${event.kind === "early-reset" ? "early reset" : event.kind} (${event.note})`);
+          this.host.emit("quota", { accountId: account.id, kind: event.kind, at: event.at, note: event.note });
+        }
+      }
+    } else {
+      if (result.kind === "signed-out") state.signIn = "signed-out";
+      if (result.kind === "expired") state.signIn = "expired";
+      state.limitsNote = result.kind === "unsupported" ? result.reason : null;
+      state.quota = readFailed(state.quota, result.reason, now);
+      if (result.kind === "unsupported") state.quota.failures = 0;
+    }
+    this.due.set(account.id, Math.max(nextReadAt({ record: state.quota, now, random: this.random() }), now + MIN_READ_MS));
+    this.save();
+    this.host.emit("pools", { changed: true });
+  }
+  // ---- launches ----
+  /** The launcher's choices for this agent: its pool, and each pool account by name. */
+  launchOptions(provider) {
+    if (!isPoolProvider(provider)) return [];
+    const members = this.settings.accounts.filter((account) => account.provider === provider);
+    if (!members.length) return [];
+    return [
+      { value: `${POOL_VALUE}${provider}`, label: `${POOL_INFO[provider].label} pool \xB7 the account with the most room (${members.length})` },
+      ...members.map((account) => ({ value: `${MEMBER_VALUE}${account.id}`, label: `${account.label} \xB7 own sign-in` }))
+    ];
+  }
+  handles(value) {
+    return value.startsWith(POOL_VALUE) || value.startsWith(MEMBER_VALUE) || value.startsWith(SIGN_IN_VALUE);
+  }
+  /** `canvastty.launch.prepare` for a pool choice. */
+  async prepare(context, value, effort, trust) {
+    if (!isPoolProvider(context.provider)) return refuse(`${context.provider} has no subscription pool here.`);
+    const provider = context.provider;
+    if (context.environment && context.environment.kind !== "worktree") return refuse(`Pool accounts run on this computer only (a worktree is fine), not in "${context.environment.kind}": a sign-in is never copied elsewhere.`);
+    let effortArgs;
+    try {
+      effortArgs = effortArguments(provider, effort);
+    } catch (error) {
+      return refuse(errorText(error));
+    }
+    if (value.startsWith(SIGN_IN_VALUE)) return this.prepareSignIn(context, value.slice(SIGN_IN_VALUE.length));
+    let account;
+    const earlier = this.sessions.get(context.sessionId);
+    if ((context.restoring || context.resume) && earlier) {
+      account = this.find(earlier);
+      if (!account) return refuse("The pool account this card ran on was removed; start a new card.");
+      if (this.facts(account, context.sessionId).active > 0) return refuse(`${account.label} already runs another card (one card per sign-in); close it first.`);
+    } else if (value.startsWith(POOL_VALUE)) {
+      const wanted = value.slice(POOL_VALUE.length);
+      if (wanted !== provider) return refuse(`The ${wanted.slice(0, 20)} pool cannot run ${POOL_INFO[provider].label}.`);
+      const members = this.settings.accounts.filter((entry) => entry.provider === provider);
+      if (!members.length) return refuse(`There are no ${POOL_INFO[provider].label} accounts in the pool; add one in the Accounts settings.`);
+      const { ranked, skipped } = rankPool(members, (entry) => this.facts(entry, context.sessionId));
+      account = ranked[0]?.account;
+      if (!account) return refuse(`No ${POOL_INFO[provider].label} pool account can take this card now: ${summarize(skipped)}.`);
+    } else {
+      account = this.find(value.slice(MEMBER_VALUE.length));
+      if (!account) return refuse("That pool account no longer exists; choose another one in the launcher.");
+      if (account.provider !== provider) return refuse(`${account.label} is a ${POOL_INFO[account.provider].label} account.`);
+      const reservations = this.reservations.get(account.id);
+      if (reservations?.length) reservations.shift();
+      const facts = this.facts(account, context.sessionId);
+      if (facts.active > 0) return refuse(`${account.label} already runs a card (one card per sign-in, so its refresh token is never used twice); use pool:${provider} or close that card.`);
+      if (facts.signIn === "signed-out" || facts.signIn === "expired") return refuse(`${account.label} is not signed in; sign in again in the Accounts settings.`);
+      if (facts.quota.state === "exhausted") {
+        if (context.role === "subagent") return refuse(`${account.label}'s quota is used up (${facts.quota.note}); omit the account and use pool:${provider} to let the pool choose.`);
+        this.host.log("warn", `${account.label}: started although its quota is used up (${facts.quota.note}).`);
+      }
+    }
+    const home = this.homeOf(account.id);
+    try {
+      await ensureHome(home);
+      const folders = [...trust ? [context.cwd] : [], ...typeof context.trustedFolder === "string" ? [context.trustedFolder] : []];
+      if (provider === "claude" && folders.length) await seedClaudeHome(home, folders);
+    } catch (error) {
+      return refuse(`The pool account's home could not be prepared: ${errorText(error)}`);
+    }
+    this.sessions.set(context.sessionId, account.id);
+    if (this.cardEvents) this.running.add(context.sessionId);
+    const state = this.member(account.id);
+    state.lastUsedAt = this.now();
+    state.quota = used(state.quota, this.now());
+    this.save();
+    const args = [...effortArgs, ...provider === "codex" && trust ? codexTrustArguments([context.cwd]) : []];
+    return { env: { [POOL_INFO[provider].homeVariable]: home, ...POOL_INFO[provider].env }, secretEnv: {}, args, files: [] };
+  }
+  async prepareSignIn(context, rest) {
+    const [accountId, nonce] = rest.split(":");
+    const pending = nonce ? this.signIns.get(nonce) : void 0;
+    if (context.role === "subagent" || context.restoring || context.resume || !pending || pending.accountId !== accountId || pending.expiresAt <= this.now()) {
+      return refuse("This sign-in card is not current; start the sign-in again from the Accounts settings.");
+    }
+    this.signIns.delete(nonce);
+    const account = this.find(accountId);
+    if (!account || account.provider !== context.provider) return refuse("That pool account no longer exists.");
+    if (this.facts(account, context.sessionId).active > 0) return refuse(`A card already runs on ${account.label}; close it before signing in again.`);
+    let home;
+    try {
+      home = await ensureHome(this.homeOf(account.id));
+    } catch (error) {
+      return refuse(`The pool account's home could not be prepared: ${errorText(error)}`);
+    }
+    this.sessions.set(context.sessionId, account.id);
+    if (this.cardEvents) this.running.add(context.sessionId);
+    this.signInCards.set(context.sessionId, account.id);
+    this.save();
+    return { env: { [POOL_INFO[account.provider].homeVariable]: home, ...POOL_INFO[account.provider].env }, secretEnv: {}, args: [], files: [] };
+  }
+  // ---- orchestrator tools ----
+  routeRow(account, effort, facts, state, reason) {
+    return {
+      provider: account.provider,
+      agent: POOL_INFO[account.provider].label,
+      accountId: account.id,
+      account: account.label,
+      kind: "subscription",
+      model: "the account's own models",
+      endpoint: `${POOL_INFO[account.provider].label} sign-in on this computer`,
+      state,
+      ...reason ? { reason } : {},
+      ...state === "ready" ? { launchOptions: { [PLUGIN_ID]: { account: `${MEMBER_VALUE}${account.id}`, effort, trustFolder: false } } } : {},
+      quota: routeQuota(facts.quota),
+      trust: account.trust
+    };
+  }
+  /** Every pool account as a route row, in the person's order. */
+  routes(filter) {
+    const rows = [];
+    for (const provider of POOL_PROVIDERS) {
+      if (filter.provider && filter.provider !== provider) continue;
+      const members = this.settings.accounts.filter((account) => account.provider === provider);
+      const { ranked, skipped } = rankPool(members, (account) => this.facts(account), { ...filter.dataClass ? { dataClass: filter.dataClass } : {}, ...filter.mode ? { mode: filter.mode } : {} });
+      for (const account of members) {
+        const facts = this.facts(account);
+        const out = skipped.find((entry) => entry.account.id === account.id);
+        if (!out) {
+          rows.push(this.routeRow(account, filter.effort, facts, "ready", ranked.find((entry) => entry.account.id === account.id)?.note));
+          continue;
+        }
+        const state = facts.signIn === "signed-out" || facts.signIn === "expired" ? "signed-out" : facts.quota.state === "exhausted" ? "quota-exhausted" : facts.active > 0 ? "busy" : "data-class";
+        rows.push(this.routeRow(account, filter.effort, facts, state, out.reason));
+      }
+    }
+    return rows;
+  }
+  /** The best pool account for this agent now, reserved for a minute so parallel picks spread over the pool. */
+  pick(provider, request) {
+    const members = this.settings.accounts.filter((account) => account.provider === provider);
+    if (!members.length) return null;
+    const { ranked, skipped } = rankPool(members, (account) => this.facts(account), { ...request.dataClass ? { dataClass: request.dataClass } : {}, ...request.mode ? { mode: request.mode } : {} });
+    const chosen = ranked[0];
+    if (!chosen) throw new Error(`No ${POOL_INFO[provider].label} pool account is free: ${summarize(skipped)}.`);
+    this.reservations.set(chosen.account.id, [...this.reservations.get(chosen.account.id) ?? [], this.now() + RESERVATION_MS]);
+    const quota = routeQuota(chosen.facts.quota);
+    const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${quota.remainingPercent}% left (${quota.confidence})`;
+    return {
+      accountId: chosen.account.id,
+      account: chosen.account.label,
+      trust: chosen.account.trust,
+      quota,
+      launchOptions: { [PLUGIN_ID]: { account: `${MEMBER_VALUE}${chosen.account.id}`, effort: request.effort, trustFolder: false } },
+      why: `${POOL_INFO[provider].label} on the pool account ${chosen.account.label}: ${room}, the most room among ${ranked.length} free of ${members.length}` + (chosen.note ? `; ${chosen.note}` : "") + (skipped.length ? `; skipped ${summarize(skipped)}` : "") + "."
+    };
+  }
+  // ---- the state file ----
+  save() {
+    this.writeTimer ??= setTimeout(() => {
+      this.writeTimer = null;
+      void this.flush();
+    }, WRITE_DELAY_MS2);
+    this.writeTimer.unref?.();
+  }
+  flush() {
+    if (this.writeTimer) {
+      clearTimeout(this.writeTimer);
+      this.writeTimer = null;
+    }
+    const ids = new Set(this.settings.accounts.map((account) => account.id));
+    const members = Object.fromEntries([...this.members].filter(([id]) => ids.has(id) || this.unread));
+    const sessions = Object.fromEntries([...this.sessions].filter(([, id]) => ids.has(id) || this.unread).slice(-2e3));
+    const json = JSON.stringify({ version: 1, members, sessions });
+    this.writing = this.writing.then(async () => {
+      const temporary = join3(this.dataDir, `.${POOL_STATE_FILE}.${randomUUID3()}.tmp`);
+      try {
+        await mkdir3(this.dataDir, { recursive: true, mode: 448 });
+        await writeFile3(temporary, json, { mode: 384, flag: "wx" });
+        await rename3(temporary, this.file);
+      } catch {
+        this.host.log("warn", "pools: the pool state could not be saved");
+      } finally {
+        await rm3(temporary, { force: true }).catch(() => void 0);
+      }
+    });
+    return this.writing;
+  }
+};
+function summarize(skipped) {
+  if (!skipped.length) return "none is set up";
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of skipped) {
+    const key = entry.reason.replace(/\(.*\)$/u, "").trim();
+    groups.set(key, [...groups.get(key) ?? [], entry.account.label]);
+  }
+  return [...groups].sort((a, b) => b[1].length - a[1].length).map(([reason, labels]) => `${labels.length} ${reason} (${labels.slice(0, 5).join(", ")}${labels.length > 5 ? ", \u2026" : ""})`).join("; ");
+}
+
 // src/service/accounts.ts
-var STORAGE_KEY = "accounts";
+var STORAGE_KEY2 = "accounts";
 var PREFLIGHT_BUDGET_MS = 3500;
 var originOf = (url) => {
   try {
@@ -1641,8 +2428,8 @@ var originOf = (url) => {
 };
 var VENDOR_ORIGINS = { claude: "https://api.anthropic.com", codex: "https://api.openai.com" };
 var thirdPartyModel = (harness, baseUrl) => !baseUrl || VENDOR_ORIGINS[harness] !== originOf(baseUrl);
-var refuse = (reason) => ({ refuse: { reason: reason.replace(/[\u0000-\u001f\u007f]+/gu, " ").slice(0, 240) } });
-var errorText = (error) => error instanceof Error ? error.message : String(error);
+var refuse2 = (reason) => ({ refuse: { reason: reason.replace(/[\u0000-\u001f\u007f]+/gu, " ").slice(0, 240) } });
+var errorText2 = (error) => error instanceof Error ? error.message : String(error);
 var AccountsService = class {
   settings;
   keyOrigins;
@@ -1659,6 +2446,8 @@ var AccountsService = class {
   writes = Promise.resolve();
   /** Each account's quota, read from its provider on the reader's own schedule (quota/reader.ts). */
   quota;
+  /** Subscription account pools: the person's own sign-ins, several per agent (pools/service.ts). */
+  pools;
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
   constructor(options) {
     this.host = options.host;
@@ -1680,6 +2469,14 @@ var AccountsService = class {
       ...options.now ? { now: options.now } : {},
       ...options.random ? { random: options.random } : {}
     });
+    this.pools = new PoolService({
+      host: options.host,
+      dataDir: options.dataDir,
+      ...options.poolsUnread ? { unread: true } : { saved: options.savedPools },
+      takenIds: () => new Set(this.settings.accounts.map((account) => account.id)),
+      ...options.now ? { now: options.now } : {},
+      ...options.random ? { random: options.random } : {}
+    });
   }
   apply(value) {
     const saved = value && typeof value === "object" ? value : {};
@@ -1692,8 +2489,9 @@ var AccountsService = class {
    * instead of showing (and a save writing) an empty list over them.
    */
   async load() {
+    await this.pools.load();
     if (!this.unread) return;
-    this.loading ??= this.host.callHost("storage.get", { key: STORAGE_KEY }).then((saved) => {
+    this.loading ??= this.host.callHost("storage.get", { key: STORAGE_KEY2 }).then((saved) => {
       this.apply(saved);
       this.unread = false;
     }).finally(() => {
@@ -1715,7 +2513,7 @@ var AccountsService = class {
   /** Writes `value`; the caller takes it into memory only once this resolved, so memory never shows what is not saved. */
   async persist(value) {
     if (this.unread) throw new Error("The saved accounts could not be read; nothing was changed. Try again.");
-    await this.host.callHost("storage.set", { key: STORAGE_KEY, value });
+    await this.host.callHost("storage.set", { key: STORAGE_KEY2, value });
   }
   serialized(run) {
     const next = this.writes.then(run, run);
@@ -1749,10 +2547,12 @@ var AccountsService = class {
       const view = this.quota.view(account);
       if (view) quota[account.id] = { ...routeQuota(view), readable: quotaUrlOf(account) !== null, events: this.quota.events(account.id).slice(-5) };
     }
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota };
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view() };
   }
   async save(value) {
     const next = validateSettings(value);
+    const clash = next.accounts.find((account) => this.pools.find(account.id));
+    if (clash) throw new Error(`${clash.id} is already the name of a pool account; rename the model account.`);
     return this.serialized(async () => {
       const keyOrigins = { ...this.keyOrigins };
       const removed = [];
@@ -1822,7 +2622,7 @@ var AccountsService = class {
         result = { kind: "key", ok: problem === null, problem };
       }
     } catch (error) {
-      result = { error: errorText(error) };
+      result = { error: errorText2(error) };
     }
     if ((this.checkEpochs.get(account.id) ?? 0) === epoch && this.find(account.id)) this.checks.set(account.id, result);
     return result;
@@ -1836,14 +2636,28 @@ var AccountsService = class {
     await this.quota.read(account, url);
     return { read: true };
   }
+  // ---- the settings page: pools ----
+  poolAdd(params) {
+    return this.pools.add(params);
+  }
+  poolSignIn(accountId) {
+    return this.pools.signIn(accountId);
+  }
+  poolUpdate(params) {
+    return this.pools.update(params);
+  }
+  poolRemove(accountId) {
+    return this.pools.remove(accountId);
+  }
+  poolCheck(accountId) {
+    return this.pools.check(accountId);
+  }
   // ---- CanvasTTY: the launcher list and the launch ----
   /** `canvastty.launch.options`: the accounts the person allowed for this agent. */
   launchOptions(provider) {
     const harness = HARNESSES.find((entry) => entry === provider);
-    if (!harness) return { account: [] };
-    return {
-      account: this.settings.accounts.filter((account) => account.agents.includes(harness) && harnessSupport(harness, account).ok).map((account) => ({ value: account.id, label: `${account.label} \xB7 ${account.model}` }))
-    };
+    const models = harness ? this.settings.accounts.filter((account) => account.agents.includes(harness) && harnessSupport(harness, account).ok).map((account) => ({ value: account.id, label: `${account.label} \xB7 ${account.model}` })) : [];
+    return { account: [...models, ...this.pools.launchOptions(provider)] };
   }
   /** `canvastty.launch.prepare`. */
   async prepare(context) {
@@ -1856,21 +2670,22 @@ var AccountsService = class {
     try {
       effortArgs = effortArguments(context.provider, effort);
     } catch (error) {
-      return refuse(errorText(error));
+      return refuse2(errorText2(error));
     }
+    if (this.pools.handles(accountId)) return this.pools.prepare(context, accountId, effort, trust);
     if (accountId === "none") {
       const args = [...effortArgs, ...trust && context.provider === "codex" ? codexTrustArguments([context.cwd]) : []];
       return args.length ? { env: {}, secretEnv: {}, args, files: [] } : null;
     }
     const account = this.find(accountId);
-    if (!account) return refuse(`Model account ${accountId.slice(0, 40)} no longer exists; choose another one in the launcher.`);
-    if (context.role === "subagent" && decisionsOnlyAccount(account)) return refuse(`${account.label} cannot run a subagent: ${DECISIONS_ONLY_REASON}.`);
+    if (!account) return refuse2(`Model account ${accountId.slice(0, 40)} no longer exists; choose another one in the launcher.`);
+    if (context.role === "subagent" && decisionsOnlyAccount(account)) return refuse2(`${account.label} cannot run a subagent: ${DECISIONS_ONLY_REASON}.`);
     const harness = HARNESSES.find((entry) => entry === context.provider);
-    if (!harness || !account.agents.includes(harness)) return refuse(`${account.label} is not set up for ${HARNESS_LABELS[context.provider] ?? context.provider}.`);
+    if (!harness || !account.agents.includes(harness)) return refuse2(`${account.label} is not set up for ${HARNESS_LABELS[context.provider] ?? context.provider}.`);
     const support = harnessSupport(harness, account);
-    if (!support.ok) return refuse(support.reason === "responses-api" ? "Codex needs an endpoint with the OpenAI Responses API." : `${HARNESS_LABELS[harness]} cannot run on this account.`);
+    if (!support.ok) return refuse2(support.reason === "responses-api" ? "Codex needs an endpoint with the OpenAI Responses API." : `${HARNESS_LABELS[harness]} cannot run on this account.`);
     if (context.environment && context.environment.kind !== "worktree") {
-      return refuse(`A model account runs agents on this computer (a worktree is fine), not in "${context.environment.kind}".`);
+      return refuse2(`A model account runs agents on this computer (a worktree is fine), not in "${context.environment.kind}".`);
     }
     const protocol = protocolOf(account);
     const shape = ollamaShapeOf(account);
@@ -1878,16 +2693,16 @@ var AccountsService = class {
     let keyValue;
     if (keyed) {
       const key = await this.readKey(account).catch(() => null);
-      if (!key) return refuse(`${account.label} has no key; save one in the Accounts settings.`);
-      if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return refuse(`The key of ${account.label} was saved for another address; save it again in the Accounts settings.`);
+      if (!key) return refuse2(`${account.label} has no key; save one in the Accounts settings.`);
+      if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return refuse2(`The key of ${account.label} was saved for another address; save it again in the Accounts settings.`);
       const problem = apiKeyProblem(key);
-      if (problem) return refuse(`${apiKeyProblemMessage(problem)} (${account.label})`);
+      if (problem) return refuse2(`${apiKeyProblemMessage(problem)} (${account.label})`);
       const substitution = harness === "opencode" ? envSubstitutionProblem(key) : null;
-      if (substitution) return refuse(openCodeKeyRefusal(substitution));
+      if (substitution) return refuse2(openCodeKeyRefusal(substitution));
       if (harness === "kimi") keyValue = key;
       if (harness === "claude") {
         const route = await projectRouteProblem(context.cwd);
-        if (route) return refuse(route);
+        if (route) return refuse2(route);
       }
     }
     let preflight = null;
@@ -1901,7 +2716,7 @@ var AccountsService = class {
           })
         ]);
       } catch (error) {
-        return refuse(errorText(error));
+        return refuse2(errorText2(error));
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -1910,7 +2725,7 @@ var AccountsService = class {
     let model = account.model;
     if (shape === "cloud-direct") {
       const wire = ollamaWireModel(shape, account.model);
-      if (!wire.ok) return refuse(`Model ${account.model} is not an Ollama Cloud name.`);
+      if (!wire.ok) return refuse2(`Model ${account.model} is not an Ollama Cloud name.`);
       model = wire.model;
     } else if (preflight) model = preflight.wireModel;
     let home;
@@ -1919,7 +2734,7 @@ var AccountsService = class {
       const folders = [...trust ? [context.cwd] : [], ...typeof context.trustedFolder === "string" ? [context.trustedFolder] : []];
       if (harness === "claude") await seedClaudeHome(home, folders);
     } catch (error) {
-      return refuse(`The account's agent home could not be prepared: ${errorText(error)}`);
+      return refuse2(`The account's agent home could not be prepared: ${errorText2(error)}`);
     }
     let contribution;
     try {
@@ -1938,7 +2753,7 @@ var AccountsService = class {
         ...trust && harness === "codex" ? { trustedFolders: [context.cwd] } : {}
       });
     } catch (error) {
-      return refuse(errorText(error));
+      return refuse2(errorText2(error));
     }
     contribution.args.push(...effortArgs);
     if (thirdPartyModel(harness, account.baseUrl)) contribution.thirdPartyModel = true;
@@ -1962,27 +2777,49 @@ var AccountsService = class {
     const provider = text2(input.provider, 32);
     const model = text2(input.model, 100);
     const effort = text2(input.effort, 20);
+    const dataClass = DATA_CLASSES.includes(input.dataClass) ? input.dataClass : void 0;
+    const mode = ["strict", "warn", "off"].find((entry) => entry === input.dataClassMode);
+    if (input.dataClass !== void 0 && !dataClass) return { content: "dataClass must be D0, D1, D2 or D3.", isError: true };
+    if (name === "list_routes" || name === "pick_account") this.pools.demand(provider);
     if (name === "list_routes" || name === "pick_account") this.quota.demand(this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)));
     if (name === "list_routes") {
       let routes;
       try {
-        routes = await listRoutes(this.settings.accounts, this.facts(), { ...provider ? { provider } : {}, ...model ? { model } : {}, ...effort ? { effort } : {} });
+        const checked = checkEffort(effort);
+        routes = [
+          ...await listRoutes(this.settings.accounts, this.facts(), { ...provider ? { provider } : {}, ...model ? { model } : {}, ...effort ? { effort } : {} }),
+          // Pool accounts run the agent's own models: a model filter leaves them out.
+          ...model ? [] : this.pools.routes({ ...provider ? { provider } : {}, effort: checked, ...dataClass ? { dataClass } : {}, ...mode ? { mode } : {} })
+        ];
       } catch (error) {
-        return { content: errorText(error), isError: true };
+        return { content: errorText2(error), isError: true };
       }
       return { content: {
         routes,
+        pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent. Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time.`,
         signIn: "Each agent's own CLI sign-in is not listed here: spawn_agent without launchOptions uses it, and CanvasTTY reports when it does not work.",
         howTo: "Pass a ready route's launchOptions to spawn_agent unchanged (same provider)."
       } };
     }
     if (name === "pick_account") {
-      if (!provider) return { content: "Give the agent in `provider` (claude, codex, opencode, qwen or kimi).", isError: true };
+      if (!provider) return { content: "Give the agent in `provider` (claude, codex, grok, opencode, qwen or kimi).", isError: true };
+      const source = input.source === "accounts" || input.source === "pool" ? input.source : "any";
+      let poolError = null;
+      if (source !== "accounts" && isPoolProvider(provider)) {
+        try {
+          const picked = this.pools.pick(provider, { effort: checkEffort(effort), ...dataClass ? { dataClass } : {}, ...mode ? { mode } : {} });
+          if (picked) return { content: { ...picked, kind: "subscription", spawn: { provider, launchOptions: picked.launchOptions } } };
+        } catch (error) {
+          poolError = errorText2(error);
+        }
+      }
+      if (source === "pool") return { content: poolError ?? `There is no ${POOL_INFO[provider]?.label ?? provider} pool.`, isError: true };
+      if (poolError && !HARNESSES.includes(provider)) return { content: poolError, isError: true };
       try {
         const pick = await pickAccount(this.settings.accounts, this.facts(), { provider, ...model ? { model } : {}, ...effort ? { effort } : {} });
         return { content: { ...pick, spawn: { provider, launchOptions: pick.launchOptions } } };
       } catch (error) {
-        return { content: errorText(error), isError: true };
+        return { content: poolError ? `${poolError} ${errorText2(error)}` : errorText2(error), isError: true };
       }
     }
     return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };
@@ -2005,15 +2842,25 @@ serve({
   exit: (code) => {
     const done = () => process.exit(code);
     setTimeout(done, 500).unref();
-    void Promise.allSettled([started?.quota.stop()]).finally(done);
+    void Promise.allSettled([started?.quota.stop(), started?.pools.stop()]).finally(done);
   },
   onInitialize: async (params, host) => {
     const dataDir = typeof params.dataDir === "string" ? params.dataDir : process.cwd();
     const read = await host.callHost("storage.get", { key: "accounts" }).then((value) => ({ value }), () => null);
     if (!read) host.log("warn", "The saved accounts could not be read; reading them again on the next request.");
-    started = new AccountsService({ host, dataDir, quotaFetch: networkFetch, ...read ? { saved: read.value } : { unread: true } });
+    const pools = await host.callHost("storage.get", { key: "pools" }).then((value) => ({ value }), () => null);
+    started = new AccountsService({ host, dataDir, quotaFetch: networkFetch, ...read ? { saved: read.value } : { unread: true }, ...pools ? { savedPools: pools.value } : { poolsUnread: true } });
     started.quota.start();
+    await started.pools.start();
     resolveReady(started);
+  },
+  notifications: {
+    "canvastty.sessions.event": (params) => {
+      void service().then((accounts) => accounts.pools.sessionEvent(params)).catch(() => void 0);
+    },
+    "canvastty.limits.changed": (params) => {
+      void service().then((accounts) => accounts.pools.limitsChanged(params)).catch(() => void 0);
+    }
   },
   methods: {
     // Host-only requests.
@@ -2025,6 +2872,11 @@ serve({
     save: async (params) => (await service()).save(params.settings),
     check: async (params) => (await service()).check(params.accountId),
     keyChanged: async (params) => (await service()).keyChanged(params.accountId),
-    quotaRead: async (params) => (await service()).readQuota(params.accountId)
+    quotaRead: async (params) => (await service()).readQuota(params.accountId),
+    poolAdd: async (params) => (await service()).poolAdd(params),
+    poolSignIn: async (params) => (await service()).poolSignIn(params.accountId),
+    poolUpdate: async (params) => (await service()).poolUpdate(params),
+    poolRemove: async (params) => (await service()).poolRemove(params.accountId),
+    poolCheck: async (params) => (await service()).poolCheck(params.accountId)
   }
 });

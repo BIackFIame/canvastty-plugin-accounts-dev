@@ -101,7 +101,29 @@
       resets: (time) => `resets ${time}`,
       age: (minutes) => minutes === null ? "not read yet" : minutes < 1 ? "read just now" : `read ${minutes} min ago`,
       passive: "Only limit messages are seen for this provider; its quota is not read.",
-      earlyReset: "early reset"
+      earlyReset: "early reset",
+      pools: "Subscription accounts",
+      poolsLead: `Your own sign-ins, several per agent. Each account gets its own folder inside this plugin; you sign in once in the agent's own sign-in (browser, password or Google) \u2014 CanvasTTY never sees the password. Launch on "<agent> pool" to get the account with the most quota left. One card per account at a time, and accounts stay on this computer.`,
+      poolAccounts: (count) => `${count} account(s)`,
+      poolNone: "No accounts yet.",
+      poolAdd: "Add account",
+      poolTrust: "Trust with data up to",
+      trustUnset: "Not set (decide later)",
+      poolChooseTrust: "Choose how far you trust this account first.",
+      signIn: "Sign in",
+      signInAgain: "Sign in again",
+      poolCheck: "Check",
+      poolSignInOpened: "A card with the sign-in opened on the canvas.",
+      signState: { "signed-in": "signed in", "signed-out": "not signed in", expired: "sign-in expired", unknown: "sign-in unknown" },
+      signingIn: "signing in\u2026",
+      running: (count) => `${count} card running`,
+      lastUsed: (time) => `last used ${time}`,
+      neverUsed: "not used yet",
+      poolLimitsNo: 'This CanvasTTY cannot read quotas for these accounts; they are picked as "unknown" (never as used up).',
+      poolHomeLimit: (limit) => `CanvasTTY reads quotas for at most ${limit} accounts per plugin; the others stay "unknown". You can still add and use them.`,
+      poolNoEvents: 'CanvasTTY sends this plugin no card events, so "one card per account" cannot be checked.',
+      poolRemoveNote: "Removing deletes the account's folder with its sign-in. Claude Code on macOS keeps its sign-in in the Keychain: type /logout in a card on the account first if you want that gone too.",
+      notPooled: "Not available as pools:"
     },
     ru: {
       title: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043C\u043E\u0434\u0435\u043B\u0435\u0439",
@@ -147,7 +169,29 @@
       resets: (time) => `\u0441\u0431\u0440\u043E\u0441 ${time}`,
       age: (minutes) => minutes === null ? "\u0435\u0449\u0451 \u043D\u0435 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430" : minutes < 1 ? "\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0442\u043E" : `\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430 ${minutes} \u043C\u0438\u043D \u043D\u0430\u0437\u0430\u0434`,
       passive: "\u0423 \u044D\u0442\u043E\u0433\u043E \u043F\u0440\u043E\u0432\u0430\u0439\u0434\u0435\u0440\u0430 \u0432\u0438\u0434\u043D\u044B \u0442\u043E\u043B\u044C\u043A\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F \u043E \u043B\u0438\u043C\u0438\u0442\u0435; \u043A\u0432\u043E\u0442\u0430 \u043D\u0435 \u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F.",
-      earlyReset: "\u0434\u043E\u0441\u0440\u043E\u0447\u043D\u044B\u0439 \u0441\u0431\u0440\u043E\u0441"
+      earlyReset: "\u0434\u043E\u0441\u0440\u043E\u0447\u043D\u044B\u0439 \u0441\u0431\u0440\u043E\u0441",
+      pools: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043F\u043E\u0434\u043F\u0438\u0441\u043E\u043A",
+      poolsLead: "\u0412\u0430\u0448\u0438 \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0435 \u0432\u0445\u043E\u0434\u044B, \u043F\u043E \u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u0443 \u043D\u0430 \u0430\u0433\u0435\u043D\u0442\u0430. \u0423 \u043A\u0430\u0436\u0434\u043E\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438 \u0441\u0432\u043E\u044F \u043F\u0430\u043F\u043A\u0430 \u0432\u043D\u0443\u0442\u0440\u0438 \u044D\u0442\u043E\u0433\u043E \u043F\u043B\u0430\u0433\u0438\u043D\u0430; \u0432\u044B \u0432\u0445\u043E\u0434\u0438\u0442\u0435 \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u0447\u0435\u0440\u0435\u0437 \u0432\u0445\u043E\u0434 \u0441\u0430\u043C\u043E\u0433\u043E \u0430\u0433\u0435\u043D\u0442\u0430 (\u0431\u0440\u0430\u0443\u0437\u0435\u0440, \u043F\u0430\u0440\u043E\u043B\u044C \u0438\u043B\u0438 Google) \u2014 CanvasTTY \u043F\u0430\u0440\u043E\u043B\u044C \u043D\u0435 \u0432\u0438\u0434\u0438\u0442. \u0417\u0430\u043F\u0443\u0441\u043A \u043D\u0430 \xAB\u043F\u0443\u043B\u0435 <\u0430\u0433\u0435\u043D\u0442\u0430>\xBB \u0431\u0435\u0440\u0451\u0442 \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C \u0441 \u043D\u0430\u0438\u0431\u043E\u043B\u044C\u0448\u0438\u043C \u043E\u0441\u0442\u0430\u0442\u043A\u043E\u043C \u043A\u0432\u043E\u0442\u044B. \u041E\u0434\u043D\u0430 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0430 \u043D\u0430 \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C \u043E\u0434\u043D\u043E\u0432\u0440\u0435\u043C\u0435\u043D\u043D\u043E; \u0443\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043E\u0441\u0442\u0430\u044E\u0442\u0441\u044F \u043D\u0430 \u044D\u0442\u043E\u043C \u043A\u043E\u043C\u043F\u044C\u044E\u0442\u0435\u0440\u0435.",
+      poolAccounts: (count) => `\u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439: ${count}`,
+      poolNone: "\u041F\u043E\u043A\u0430 \u043D\u0435\u0442 \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439.",
+      poolAdd: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C",
+      poolTrust: "\u0414\u043E\u0432\u0435\u0440\u044F\u044E \u0434\u0430\u043D\u043D\u044B\u0435 \u0434\u043E",
+      trustUnset: "\u041D\u0435 \u0437\u0430\u0434\u0430\u043D\u043E (\u0440\u0435\u0448\u0443 \u043F\u043E\u0437\u0436\u0435)",
+      poolChooseTrust: "\u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435, \u043D\u0430\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u0432\u044B \u0434\u043E\u0432\u0435\u0440\u044F\u0435\u0442\u0435 \u044D\u0442\u043E\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438.",
+      signIn: "\u0412\u043E\u0439\u0442\u0438",
+      signInAgain: "\u0412\u043E\u0439\u0442\u0438 \u0437\u0430\u043D\u043E\u0432\u043E",
+      poolCheck: "\u041F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C",
+      poolSignInOpened: "\u041D\u0430 \u0445\u043E\u043B\u0441\u0442\u0435 \u043E\u0442\u043A\u0440\u044B\u043B\u0430\u0441\u044C \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0430 \u0441\u043E \u0432\u0445\u043E\u0434\u043E\u043C.",
+      signState: { "signed-in": "\u0432\u0445\u043E\u0434 \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D", "signed-out": "\u0432\u0445\u043E\u0434 \u043D\u0435 \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D", expired: "\u0432\u0445\u043E\u0434 \u0438\u0441\u0442\u0451\u043A", unknown: "\u0432\u0445\u043E\u0434 \u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u0435\u043D" },
+      signingIn: "\u0438\u0434\u0451\u0442 \u0432\u0445\u043E\u0434\u2026",
+      running: (count) => `\u0437\u0430\u043F\u0443\u0449\u0435\u043D\u043E \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A: ${count}`,
+      lastUsed: (time) => `\u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043B\u0430\u0441\u044C ${time}`,
+      neverUsed: "\u0435\u0449\u0451 \u043D\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043B\u0430\u0441\u044C",
+      poolLimitsNo: "\u042D\u0442\u043E\u0442 CanvasTTY \u043D\u0435 \u0443\u043C\u0435\u0435\u0442 \u0447\u0438\u0442\u0430\u0442\u044C \u043A\u0432\u043E\u0442\u044B \u044D\u0442\u0438\u0445 \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439; \u043E\u043D\u0438 \u0432\u044B\u0431\u0438\u0440\u0430\u044E\u0442\u0441\u044F \u043A\u0430\u043A \xAB\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E\xBB (\u043D\u043E \u043D\u0438\u043A\u043E\u0433\u0434\u0430 \u043A\u0430\u043A \u0438\u0441\u0447\u0435\u0440\u043F\u0430\u043D\u043D\u044B\u0435).",
+      poolHomeLimit: (limit) => `CanvasTTY \u0447\u0438\u0442\u0430\u0435\u0442 \u043A\u0432\u043E\u0442\u044B \u043D\u0435 \u0431\u043E\u043B\u0435\u0435 \u0447\u0435\u043C ${limit} \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439 \u043D\u0430 \u043F\u043B\u0430\u0433\u0438\u043D; \u0443 \u043E\u0441\u0442\u0430\u043B\u044C\u043D\u044B\u0445 \u043A\u0432\u043E\u0442\u0430 \xAB\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\xBB. \u0414\u043E\u0431\u0430\u0432\u043B\u044F\u0442\u044C \u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C \u0438\u0445 \u043C\u043E\u0436\u043D\u043E.`,
+      poolNoEvents: "CanvasTTY \u043D\u0435 \u043F\u0440\u0438\u0441\u044B\u043B\u0430\u0435\u0442 \u043F\u043B\u0430\u0433\u0438\u043D\u0443 \u0441\u043E\u0431\u044B\u0442\u0438\u044F \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u0440\u0430\u0432\u0438\u043B\u043E \xAB\u043E\u0434\u043D\u0430 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0430 \u043D\u0430 \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C\xBB \u043D\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442\u0441\u044F.",
+      poolRemoveNote: "\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u0435 \u0441\u0442\u0438\u0440\u0430\u0435\u0442 \u043F\u0430\u043F\u043A\u0443 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438 \u0432\u043C\u0435\u0441\u0442\u0435 \u0441\u043E \u0432\u0445\u043E\u0434\u043E\u043C. Claude Code \u043D\u0430 macOS \u0445\u0440\u0430\u043D\u0438\u0442 \u0432\u0445\u043E\u0434 \u0432 \u0421\u0432\u044F\u0437\u043A\u0435 \u043A\u043B\u044E\u0447\u0435\u0439: \u0447\u0442\u043E\u0431\u044B \u0443\u0431\u0440\u0430\u0442\u044C \u0438 \u0435\u0433\u043E, \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u043D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /logout \u0432 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0435 \u043D\u0430 \u044D\u0442\u043E\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438.",
+      notPooled: "\u041F\u0443\u043B\u044B \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B:"
     }
   };
   var KEY_PROBLEM = {
@@ -190,6 +234,9 @@
         await host.service.request(SERVICE, "save", { settings: { version: 1, accounts } });
         say(t.saved);
         await load().catch((error) => say(errorText(error)));
+        host.service.onEvent?.((event) => {
+          if (event?.event === "pools" || event?.event === "quota") void load().catch(() => void 0);
+        });
         return true;
       } catch (error) {
         say(`${t.notSaved}${errorText(error)}`);
@@ -393,6 +440,107 @@
     );
     return box;
   }
+  var TRUSTS = ["unset", "D0", "D1", "D2", "D3"];
+  var poolRequest = (method, params) => host.service.request(SERVICE, method, params);
+  var when = (at) => new Date(at).toLocaleString(locale === "ru" ? "ru-RU" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  function trustChoice(name, current, onChange) {
+    const box = el("span", { className: "agents", dataset: { trust: name } });
+    for (const value of TRUSTS) {
+      const input = el("input", { type: "radio", name, value, checked: current === value });
+      input.addEventListener("change", () => {
+        if (input.checked) onChange(value);
+      });
+      box.append(el("label", { className: "check" }, input, ` ${value === "unset" ? t.trustUnset : value}`));
+    }
+    return box;
+  }
+  function poolMember(member) {
+    const item = el("li", { className: "account", dataset: { pool: member.id } });
+    const parts = [member.signingIn ? t.signingIn : t.signState[member.signIn] ?? member.signIn];
+    if (member.running) parts.push(t.running(member.running));
+    parts.push(member.lastUsedAt ? t.lastUsed(when(member.lastUsedAt)) : t.neverUsed);
+    item.append(el("div", { className: "row" }, el("strong", { textContent: member.label }), el("span", { className: member.signIn === "signed-in" ? "muted" : "warn", textContent: parts.join(" \xB7 ") })));
+    const quota = member.quota;
+    const line = [t.quotaState[quota.state] ?? quota.state];
+    if (quota.remainingPercent !== null && quota.state !== "exhausted") line.push(t.left(quota.remainingPercent, quota.window));
+    if (quota.resetsAt) line.push(t.resets(when(Date.parse(quota.resetsAt))));
+    line.push(t.age(quota.ageMinutes));
+    const early = member.events.filter((event) => event.kind === "early-reset").at(-1);
+    if (early) line.push(`${t.earlyReset} ${when(early.at)}`);
+    item.append(el(
+      "div",
+      { className: "row", dataset: { quota: member.id } },
+      el("span", { className: "label", textContent: t.quota }),
+      el("span", { className: quota.state === "exhausted" ? "warn" : "muted", textContent: line.join(" \xB7 ") + (member.limitsNote ? ` \u2014 ${member.limitsNote}` : "") })
+    ));
+    item.append(el(
+      "div",
+      { className: "row" },
+      el("span", { className: "label", textContent: t.poolTrust }),
+      trustChoice(`trust-${member.id}`, member.trust, (value) => {
+        poolRequest("poolUpdate", { id: member.id, trust: value }).then(() => {
+          say(t.saved);
+          return load();
+        }, (error) => say(`${t.notSaved}${errorText(error)}`));
+      })
+    ));
+    item.append(el(
+      "div",
+      { className: "row" },
+      button(member.signIn === "signed-in" ? t.signInAgain : t.signIn, `pool-signin-${member.id}`, () => {
+        poolRequest("poolSignIn", { accountId: member.id }).then(() => {
+          say(t.poolSignInOpened);
+          return load();
+        }, (error) => say(errorText(error)));
+      }),
+      button(t.poolCheck, `pool-check-${member.id}`, () => {
+        poolRequest("poolCheck", { accountId: member.id }).then(() => load(), (error) => say(errorText(error)));
+      }),
+      button(t.remove, `pool-remove-${member.id}`, () => {
+        poolRequest("poolRemove", { accountId: member.id }).then(() => load(), (error) => say(errorText(error)));
+      })
+    ));
+    return item;
+  }
+  function poolsSection(pools) {
+    const section = el("section", { className: "pools" }, el("h2", { textContent: t.pools }), el("p", { className: "muted", textContent: t.poolsLead }));
+    if (pools.limits === "no") section.append(el("p", { className: "warn", textContent: t.poolLimitsNo }));
+    if (pools.homeLimit.over) section.append(el("p", { className: "warn", textContent: t.poolHomeLimit(pools.homeLimit.limit) }));
+    if (!pools.cardEvents) section.append(el("p", { className: "warn", textContent: t.poolNoEvents }));
+    for (const entry of pools.providers) {
+      const block = el("div", { className: "add", dataset: { poolProvider: entry.provider } });
+      block.append(el("div", { className: "row" }, el("strong", { textContent: entry.label }), el("span", { className: "muted", textContent: t.poolAccounts(entry.accounts.length) })));
+      const list = el("ul", { className: "accounts" });
+      if (!entry.accounts.length) list.append(el("li", { className: "muted", textContent: t.poolNone }));
+      for (const member of entry.accounts) list.append(poolMember(member));
+      block.append(list);
+      const label = el("input", { name: `pool-label-${entry.provider}`, placeholder: t.name });
+      let trust = null;
+      block.append(
+        el("div", { className: "row" }, field(t.name, label)),
+        el("div", { className: "row" }, el("span", { className: "label", textContent: t.poolTrust }), trustChoice(`pool-new-trust-${entry.provider}`, null, (value) => {
+          trust = value;
+        })),
+        el("div", { className: "row" }, button(t.poolAdd, `pool-add-${entry.provider}`, () => {
+          if (!trust) {
+            say(t.poolChooseTrust);
+            return;
+          }
+          poolRequest("poolAdd", { provider: entry.provider, label: label.value.trim(), trust }).then((answer) => {
+            const signIn = answer.signIn;
+            say(signIn && "error" in signIn ? String(signIn.error) : t.poolSignInOpened);
+            return load();
+          }, (error) => say(`${t.notSaved}${errorText(error)}`));
+        }), el("span", { className: "muted", textContent: entry.signInHint[locale] }))
+      );
+      section.append(block);
+    }
+    section.append(
+      el("p", { className: "muted", textContent: t.poolRemoveNote }),
+      el("p", { className: "muted", textContent: `${t.notPooled} ${Object.values(pools.notPooled).join(" ")}` })
+    );
+    return section;
+  }
   function render() {
     if (!state) return;
     const list = el("ul", { className: "accounts" });
@@ -404,7 +552,8 @@
       list,
       el("h2", { textContent: t.add }),
       addForm(),
-      el("p", { className: "muted", textContent: t.keyWriteOnly })
+      el("p", { className: "muted", textContent: t.keyWriteOnly }),
+      ...state.pools ? [poolsSection(state.pools)] : []
     );
   }
   host.onContext(({ appearance }) => {

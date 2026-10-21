@@ -10,23 +10,26 @@
     "storage",
     "secrets",
     "launch:contribute",
-    "tools:agents"
+    "tools:agents",
+    "limits:read",
+    "sessions:events",
+    "sessions:launch"
   ],
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 7087,
-      "sha256": "927cc94227523041088375c201c5360647a00a1a10fa3652cff330e4b3ec2115"
+      "bytes": 8965,
+      "sha256": "f303d3c47a07618319e02fe5ba5b978d017fe740dce9210e6efe49e840a9ec35"
     },
     {
       "path": "README.ru.md",
-      "bytes": 11283,
-      "sha256": "c87541858a84f82a494f4f0f09d18fca519f5e7b3214a9cd57c5a92aa55c3c12"
+      "bytes": 14295,
+      "sha256": "fe1e84aaaa96227f622fab1b13be0005c30d5b932d205667a276da5503c9d6ce"
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 101189,
-      "sha256": "e370d5f9983aed44adb731aa72bc45fc44c82c378789489c1e7fa4608936b351"
+      "bytes": 147309,
+      "sha256": "1113889d7ea03f2a968d6f6bc43b92eaf587b8a2e4878fe0fe4a64f98d6f311f"
     },
     {
       "path": "settings/accounts.html",
@@ -35,8 +38,8 @@
     },
     {
       "path": "settings/accounts.js",
-      "bytes": 28980,
-      "sha256": "c16b95c343ccd1b71fb8bcf8a0b6d41073e1ad99e0bc3bfdf6487f9372ebb87a"
+      "bytes": 43786,
+      "sha256": "51292163ae31fd239045cb87851856890f6ce4338ec5c8975569fd6eaa4622e7"
     },
     {
       "path": "settings/accounts.css",
@@ -121,13 +124,13 @@
       "tools": [
         {
           "name": "list_routes",
-          "description": "List the person's model accounts you can start a subagent on: agent (provider), account, model, where it runs, and whether it is ready now (key saved, Ollama running, model installed with tool calling, plan quota not used up) or why not, and the plan's quota where it is known (percent left, reset time, how old the read is; unknown is not used up). A ready route has launchOptions: pass them unchanged to spawn_agent with the same provider. Each agent's own CLI sign-in is not listed: spawn_agent without launchOptions uses it.",
+          "description": "List the person's model accounts you can start a subagent on: agent (provider), account, model, where it runs, and whether it is ready now (key saved, Ollama running, model installed with tool calling, plan quota not used up) or why not, and the plan's quota where it is known (percent left, reset time, how old the read is; unknown is not used up). A ready route has launchOptions: pass them unchanged to spawn_agent with the same provider. Subscription pools (kind \"subscription\") list the person's own extra sign-ins per agent (Claude Code, Codex, Grok, Kimi) with their quota; launchOptions {\"canvastty-accounts\":{\"account\":\"pool:<agent>\"}} lets the pool pick the account with the most room at launch. The agent's default CLI sign-in is not listed: spawn_agent without launchOptions uses it.",
           "inputSchema": {
             "type": "object",
             "properties": {
               "provider": {
                 "type": "string",
-                "description": "Only this agent: claude, codex, opencode, qwen or kimi."
+                "description": "Only this agent: claude, codex, grok, opencode, qwen or kimi."
               },
               "model": {
                 "type": "string",
@@ -136,6 +139,25 @@
               "effort": {
                 "type": "string",
                 "description": "Reasoning effort to put into launchOptions: default, minimal, low, medium, high, xhigh or max (as the agent supports)."
+              },
+              "dataClass": {
+                "type": "string",
+                "enum": [
+                  "D0",
+                  "D1",
+                  "D2",
+                  "D3"
+                ],
+                "description": "The task's data class, if known: pool accounts the person trusts below it are skipped (strict) or ranked last (warn)."
+              },
+              "dataClassMode": {
+                "type": "string",
+                "enum": [
+                  "strict",
+                  "warn",
+                  "off"
+                ],
+                "description": "The person's data-check mode for dataClass (default warn)."
               }
             },
             "additionalProperties": false
@@ -146,13 +168,13 @@
         },
         {
           "name": "pick_account",
-          "description": "Pick the model account a subagent of this agent should run on: the first ready one in the person's order, skipping accounts that cannot work right now (no key, Ollama not running, model missing, plan quota used up), with the reason. Returns spawn: { provider, launchOptions } to pass to spawn_agent. An error means no account is ready: spawn without launchOptions to use the agent's own sign-in, or ask the person.",
+          "description": "Pick the account a subagent of this agent should run on: from the agent's subscription pool first (the person's own sign-ins: the free one with the most quota left, reserved for a minute so parallel picks spread), else the model accounts, the first ready one in the person's order, skipping accounts that cannot work right now (no key, Ollama not running, model missing, plan quota used up), with the reason. Returns spawn: { provider, launchOptions } to pass to spawn_agent. An error means no account is ready: spawn without launchOptions to use the agent's own sign-in, or ask the person.",
           "inputSchema": {
             "type": "object",
             "properties": {
               "provider": {
                 "type": "string",
-                "description": "The agent: claude, codex, opencode, qwen or kimi."
+                "description": "The agent: claude, codex, grok, opencode, qwen or kimi."
               },
               "model": {
                 "type": "string",
@@ -161,6 +183,34 @@
               "effort": {
                 "type": "string",
                 "description": "Reasoning effort: default, minimal, low, medium, high, xhigh or max (as the agent supports)."
+              },
+              "dataClass": {
+                "type": "string",
+                "enum": [
+                  "D0",
+                  "D1",
+                  "D2",
+                  "D3"
+                ],
+                "description": "The task's data class, if known: pool accounts the person trusts below it are skipped (strict) or ranked last (warn)."
+              },
+              "dataClassMode": {
+                "type": "string",
+                "enum": [
+                  "strict",
+                  "warn",
+                  "off"
+                ],
+                "description": "The person's data-check mode for dataClass (default warn)."
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "any",
+                  "pool",
+                  "accounts"
+                ],
+                "description": "any (default): the agent's subscription pool first, then model accounts; pool: only the pool; accounts: only model accounts."
               }
             },
             "required": [

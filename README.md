@@ -44,6 +44,27 @@ and age, confidence), and `pick_account` skips an account whose quota is used up
 shows room before the predicted reset clears the exhaustion at once (an early or bonus reset). The state survives
 restarts (`quota.json` in the plugin's data folder, without keys). Other providers' quotas are not read.
 
+### Subscription accounts (pools)
+
+Several of your own sign-ins per agent (Claude Code, Codex, Grok, Kimi), for example a handful of Claude accounts or
+thirty Grok ones. **Add account** in the *Subscription accounts* section creates the account's own folder inside the
+plugin's data folder and opens a card running the agent's own sign-in there (browser, password or Google): you sign in
+once per account, and CanvasTTY never sees the password or the token. When you add one you also say how far you trust
+it with data (D0–D3, or *Not set* to decide later); nothing is chosen for you.
+
+Launch with *Model account → <agent> pool* (or an orchestrator's `launchOptions` `{"canvastty-accounts":{"account":"pool:grok"}}`)
+and the launch gets the signed-in account with the most quota left: an exactly read quota first, then an estimated one,
+then unknown, an account running low last; accounts used up (until their reset, or a reset that comes early), signed
+out, or already running a card are skipped. One card per account at a time, because each sign-in's refresh token can be
+used only once; a restored card continues on its own account. Quotas come from CanvasTTY (`limits.get {provider, home}`,
+needs `limits:read`), which reads at most 32 account homes per plugin; the others show "unknown". `list_routes` lists
+pool accounts as `kind: "subscription"` with quota and trust, and `pick_account` picks from the pool first.
+
+Pool accounts run on this computer only (a worktree is fine): a sign-in is never copied to another machine. Qwen Code
+cannot have a pool (no variable moves its home; its free OAuth tier closed), nor OpenCode Go (it is an API key: add it as
+a model account). Removing an account deletes its folder with the sign-in; Claude Code on macOS keeps its sign-in in the
+Keychain, so type `/logout` in a card on that account first if you want that removed too.
+
 ## What it does to a launch
 
 - Claude Code: `ANTHROPIC_BASE_URL` (Ollama gets its server root), `ANTHROPIC_AUTH_TOKEN` (the key, or `ollama` for a

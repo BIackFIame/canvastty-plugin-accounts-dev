@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -68,6 +68,7 @@ function startService(t, { dataDir, host = {} }) {
   });
   write({ method: 'canvastty.initialize', params: { apiVersion: 2, pluginId: manifest.id, serviceId: 'accounts', dataDir, locale: 'ru', hostVersion: 'test' } });
   return {
+    notify: (method, params) => write({ method, params }),
     request: (method, params) => new Promise((resolve, reject) => {
       const id = `t${nextId++}`;
       waiting.set(id, { resolve, reject });
@@ -191,11 +192,46 @@ test('over JSON-RPC: a storage read that fails at start is retried, and nothing 
   const saved = structuredClone(storage.accounts);
   let failures = 2;
   const service = startService(t, { dataDir: join(base, 'data-unread'), host: {
-    'storage.get': ({ key }) => { if (failures-- > 0) throw new Error('host busy'); return storage[key] ?? null; },
+    'storage.get': ({ key }) => { if (key === 'accounts' && failures-- > 0) throw new Error('host busy'); return storage[key] ?? null; },
     'storage.set': ({ key, value }) => { storage[key] = value; },
     'secrets.get': () => null
   } });
   await assert.rejects(service.request('save', { settings: { version: 1, accounts: [] } }), /could not be read/);
   assert.deepEqual(storage.accounts, saved);
   assert.deepEqual((await service.request('state')).settings.accounts.map(account => account.id), ['qwen']);
+});
+
+test('over JSON-RPC: a pool account is added, its sign-in card opens through sessions.create, and a pool launch gets its home', async (t) => {
+  const storage = {};
+  const dataDir = join(base, 'data-pools');
+  const created = [];
+  const calls = [];
+  const service = startService(t, { dataDir, host: {
+    'storage.get': ({ key }) => storage[key] ?? null,
+    'storage.set': ({ key, value }) => { storage[key] = value; },
+    'secrets.get': () => null,
+    'sessions.subscribe': () => { calls.push('sessions.subscribe'); return { sessions: [] }; },
+    'sessions.create': params => { created.push(params); return { sessionId: `card-${created.length}` }; },
+    'limits.get': params => { calls.push(`limits.get ${params.provider}`); throw new Error('Unknown host method: limits.get.'); }
+  } });
+  await assert.rejects(service.request('poolAdd', { provider: 'grok', label: 'Grok 1' }), /trust/);
+  const added = await service.request('poolAdd', { provider: 'grok', label: 'Grok 1', trust: 'unset' });
+  assert.deepEqual(added.signIn, { sessionId: 'card-1' });
+  const home = join(dataDir, 'pools', added.id);
+  const signIn = await service.request('canvastty.launch.prepare', { sessionId: 'card-1', provider: 'grok', profile: 'normal', role: 'agent', cwd: base, restoring: false, resume: false, chosen: true, environment: null, options: created[0].launchOptions['canvastty-accounts'] });
+  assert.deepEqual(signIn.env, { GROK_HOME: home });
+  // The sign-in ends (a fake credential appears in the home, as the CLI would write it).
+  writeFileSync(join(home, 'auth.json'), '{}', { mode: 0o600 });
+  service.notify('canvastty.sessions.event', { type: 'closed', session: { id: 'card-1' } });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const state = await service.request('state');
+  const member = state.pools.providers.find(entry => entry.provider === 'grok').accounts[0];
+  assert.equal(member.signIn, 'signed-in');
+  assert.equal(state.pools.limits, 'no', 'an older CanvasTTY without per-home limits is detected');
+  assert.deepEqual((await service.request('canvastty.launch.options', { provider: 'grok' })).account.map(option => option.value), ['pool:grok', `sub:${added.id}`]);
+  const launch = await service.request('canvastty.launch.prepare', { sessionId: 'card-2', provider: 'grok', profile: 'normal', role: 'subagent', cwd: base, restoring: false, resume: false, chosen: true, environment: null, options: { account: 'pool:grok', effort: 'high' } });
+  assert.deepEqual(launch.env, { GROK_HOME: home });
+  assert.deepEqual(launch.args, ['--reasoning-effort', 'high']);
+  assert.ok(calls.includes('sessions.subscribe'));
+  assert.deepEqual(storage.pools.accounts.map(account => account.id), [added.id]);
 });

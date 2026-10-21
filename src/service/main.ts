@@ -16,7 +16,7 @@ serve({
   exit: code => {
     const done = (): never => process.exit(code);
     setTimeout(done, 500).unref();
-    void Promise.allSettled([started?.quota.stop()]).finally(done);
+    void Promise.allSettled([started?.quota.stop(), started?.pools.stop()]).finally(done);
   },
   onInitialize: async (params, host: Host) => {
     const dataDir = typeof params.dataDir === 'string' ? params.dataDir : process.cwd();
@@ -24,10 +24,17 @@ serve({
     // so an empty list is never shown or saved over the person's accounts.
     const read = await host.callHost('storage.get', { key: 'accounts' }).then(value => ({ value }), () => null);
     if (!read) host.log('warn', 'The saved accounts could not be read; reading them again on the next request.');
-    started = new AccountsService({ host, dataDir, quotaFetch: networkFetch, ...(read ? { saved: read.value } : { unread: true }) });
+    const pools = await host.callHost('storage.get', { key: 'pools' }).then(value => ({ value }), () => null);
+    started = new AccountsService({ host, dataDir, quotaFetch: networkFetch, ...(read ? { saved: read.value } : { unread: true }), ...(pools ? { savedPools: pools.value } : { poolsUnread: true }) });
     // Quotas are read on the reader's own schedule from now on, whether or not any page is open.
     started.quota.start();
+    // Pools: card events (one card per sign-in) and CanvasTTY's quota reads of each account home.
+    await started.pools.start();
     resolveReady(started);
+  },
+  notifications: {
+    'canvastty.sessions.event': params => { void service().then(accounts => accounts.pools.sessionEvent(params)).catch(() => undefined); },
+    'canvastty.limits.changed': params => { void service().then(accounts => accounts.pools.limitsChanged(params)).catch(() => undefined); }
   },
   methods: {
     // Host-only requests.
@@ -39,6 +46,11 @@ serve({
     save: async params => (await service()).save(params.settings),
     check: async params => (await service()).check(params.accountId),
     keyChanged: async params => (await service()).keyChanged(params.accountId),
-    quotaRead: async params => (await service()).readQuota(params.accountId)
+    quotaRead: async params => (await service()).readQuota(params.accountId),
+    poolAdd: async params => (await service()).poolAdd(params),
+    poolSignIn: async params => (await service()).poolSignIn(params.accountId),
+    poolUpdate: async params => (await service()).poolUpdate(params),
+    poolRemove: async params => (await service()).poolRemove(params.accountId),
+    poolCheck: async params => (await service()).poolCheck(params.accountId)
   }
 });

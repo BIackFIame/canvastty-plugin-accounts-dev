@@ -8,9 +8,12 @@ import { buildHarnessLaunch, codexTrustArguments, type Contribution } from '../l
 import { effortArguments } from '../launch/effort.ts';
 import { ensureHome, homeFolder, projectRouteProblem, providerIdOf, removeHomes, seedClaudeHome } from '../launch/homes.ts';
 import { detectOllama, preflightOllama, type OllamaDetection, type OllamaFetch, type OllamaPreflight } from '../launch/ollama.ts';
-import { listRoutes, pickAccount, routeQuota, type RouteFacts, type RouteQuota } from '../routes/routes.ts';
+import { PLUGIN_ID, checkEffort, listRoutes, pickAccount, routeQuota, type RouteFacts, type RouteQuota } from '../routes/routes.ts';
 import { QuotaReader, quotaUrlOf, type QuotaFetch } from '../quota/reader.ts';
 import type { QuotaEvent } from '../quota/model.ts';
+import { PoolService, type PoolsView } from '../pools/service.ts';
+import { DATA_CLASSES, type DataClass, type DataClassMode } from '../pools/model.ts';
+import { POOL_INFO, isPoolProvider } from '../pools/providers.ts';
 
 /**
  * The Accounts service: the launch contributor behind the launcher's "Model account" (and reasoning effort), the
@@ -68,9 +71,11 @@ export class AccountsService {
   private writes: Promise<unknown> = Promise.resolve();
   /** Each account's quota, read from its provider on the reader's own schedule (quota/reader.ts). */
   readonly quota: QuotaReader;
+  /** Subscription account pools: the person's own sign-ins, several per agent (pools/service.ts). */
+  readonly pools: PoolService;
 
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
-  constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
+  constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; savedPools?: unknown; poolsUnread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
     this.host = options.host;
     this.dataDir = options.dataDir;
     this.transport = options.transport;
@@ -90,6 +95,11 @@ export class AccountsService {
       ...(options.now ? { now: options.now } : {}),
       ...(options.random ? { random: options.random } : {})
     });
+    this.pools = new PoolService({
+      host: options.host, dataDir: options.dataDir, ...(options.poolsUnread ? { unread: true } : { saved: options.savedPools }),
+      takenIds: () => new Set(this.settings.accounts.map(account => account.id)),
+      ...(options.now ? { now: options.now } : {}), ...(options.random ? { random: options.random } : {})
+    });
   }
 
   private apply(value: unknown): void {
@@ -104,6 +114,7 @@ export class AccountsService {
    * instead of showing (and a save writing) an empty list over them.
    */
   async load(): Promise<void> {
+    await this.pools.load();
     if (!this.unread) return;
     this.loading ??= this.host.callHost('storage.get', { key: STORAGE_KEY })
       .then(saved => { this.apply(saved); this.unread = false; })
@@ -144,7 +155,7 @@ export class AccountsService {
 
   // ---- the settings page ----
 
-  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }> }> {
+  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }>; pools: PoolsView }> {
     // One secrets read per keyed account, all at once (MAX_ACCOUNTS stays under the transport's host-call cap).
     const { settings } = this;
     const states = await Promise.all(settings.accounts.map(account =>
@@ -156,11 +167,13 @@ export class AccountsService {
       const view = this.quota.view(account);
       if (view) quota[account.id] = { ...routeQuota(view), readable: quotaUrlOf(account) !== null, events: this.quota.events(account.id).slice(-5) };
     }
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota };
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view() };
   }
 
   async save(value: unknown): Promise<{ saved: true }> {
     const next = validateSettings(value);
+    const clash = next.accounts.find(account => this.pools.find(account.id));
+    if (clash) throw new Error(`${clash.id} is already the name of a pool account; rename the model account.`);
     return this.serialized(async () => {
       const keyOrigins = { ...this.keyOrigins };
       const removed: string[] = [];
@@ -251,16 +264,23 @@ export class AccountsService {
     return { read: true };
   }
 
+  // ---- the settings page: pools ----
+
+  poolAdd(params: unknown): ReturnType<PoolService['add']> { return this.pools.add(params); }
+  poolSignIn(accountId: unknown): ReturnType<PoolService['signIn']> { return this.pools.signIn(accountId); }
+  poolUpdate(params: unknown): ReturnType<PoolService['update']> { return this.pools.update(params); }
+  poolRemove(accountId: unknown): ReturnType<PoolService['remove']> { return this.pools.remove(accountId); }
+  poolCheck(accountId: unknown): ReturnType<PoolService['check']> { return this.pools.check(accountId); }
+
   // ---- CanvasTTY: the launcher list and the launch ----
 
   /** `canvastty.launch.options`: the accounts the person allowed for this agent. */
   launchOptions(provider: unknown): Record<string, Array<{ value: string; label: string }>> {
     const harness = HARNESSES.find(entry => entry === provider);
-    if (!harness) return { account: [] };
-    return {
-      account: this.settings.accounts.filter(account => account.agents.includes(harness) && harnessSupport(harness, account).ok)
-        .map(account => ({ value: account.id, label: `${account.label} · ${account.model}` }))
-    };
+    const models = harness ? this.settings.accounts.filter(account => account.agents.includes(harness) && harnessSupport(harness, account).ok)
+      .map(account => ({ value: account.id, label: `${account.label} · ${account.model}` })) : [];
+    // The agent's own subscription sign-ins (pools) after the model accounts.
+    return { account: [...models, ...this.pools.launchOptions(provider)] };
   }
 
   /** `canvastty.launch.prepare`. */
@@ -274,6 +294,7 @@ export class AccountsService {
     let effortArgs: string[];
     try { effortArgs = effortArguments(context.provider, effort); } catch (error) { return refuse(errorText(error)); }
 
+    if (this.pools.handles(accountId)) return this.pools.prepare(context, accountId, effort, trust);
     if (accountId === 'none') {
       // The agent's own sign-in: only effort, and Codex's per-run folder trust (never written to ~/.codex).
       const args = [...effortArgs, ...(trust && context.provider === 'codex' ? codexTrustArguments([context.cwd]) : [])];
@@ -380,28 +401,49 @@ export class AccountsService {
     const provider = text(input.provider, 32);
     const model = text(input.model, 100);
     const effort = text(input.effort, 20);
+    const dataClass = (DATA_CLASSES as readonly unknown[]).includes(input.dataClass) ? input.dataClass as DataClass : undefined;
+    const mode = (['strict', 'warn', 'off'] as const).find(entry => entry === input.dataClassMode) as DataClassMode | undefined;
+    if (input.dataClass !== undefined && !dataClass) return { content: 'dataClass must be D0, D1, D2 or D3.', isError: true };
+    if (name === 'list_routes' || name === 'pick_account') this.pools.demand(provider);
     // Accounts asked about are read again in the background when their quota data is old.
     if (name === 'list_routes' || name === 'pick_account') this.quota.demand(this.settings.accounts.filter(account => !provider || account.agents.includes(provider as Harness)));
     if (name === 'list_routes') {
       let routes;
       try {
-        routes = await listRoutes(this.settings.accounts, this.facts(), { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+        const checked = checkEffort(effort);
+        routes = [
+          ...await listRoutes(this.settings.accounts, this.facts(), { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) }),
+          // Pool accounts run the agent's own models: a model filter leaves them out.
+          ...(model ? [] : this.pools.routes({ ...(provider ? { provider } : {}), effort: checked, ...(dataClass ? { dataClass } : {}), ...(mode ? { mode } : {}) }))
+        ];
       } catch (error) {
         return { content: errorText(error), isError: true };
       }
       return { content: {
         routes,
+        pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent. Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time.`,
         signIn: 'Each agent\'s own CLI sign-in is not listed here: spawn_agent without launchOptions uses it, and CanvasTTY reports when it does not work.',
         howTo: 'Pass a ready route\'s launchOptions to spawn_agent unchanged (same provider).'
       } };
     }
     if (name === 'pick_account') {
-      if (!provider) return { content: 'Give the agent in `provider` (claude, codex, opencode, qwen or kimi).', isError: true };
+      if (!provider) return { content: 'Give the agent in `provider` (claude, codex, grok, opencode, qwen or kimi).', isError: true };
+      // The agent's own subscription sign-ins first (flat-rate), unless the caller asks for model accounts only.
+      const source = input.source === 'accounts' || input.source === 'pool' ? input.source : 'any';
+      let poolError: string | null = null;
+      if (source !== 'accounts' && isPoolProvider(provider)) {
+        try {
+          const picked = this.pools.pick(provider, { effort: checkEffort(effort), ...(dataClass ? { dataClass } : {}), ...(mode ? { mode } : {}) });
+          if (picked) return { content: { ...picked, kind: 'subscription', spawn: { provider, launchOptions: picked.launchOptions } } };
+        } catch (error) { poolError = errorText(error); }
+      }
+      if (source === 'pool') return { content: poolError ?? `There is no ${(POOL_INFO as Record<string, { label: string }>)[provider]?.label ?? provider} pool.`, isError: true };
+      if (poolError && !(HARNESSES as readonly string[]).includes(provider)) return { content: poolError, isError: true };
       try {
         const pick = await pickAccount(this.settings.accounts, this.facts(), { provider, ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
         return { content: { ...pick, spawn: { provider, launchOptions: pick.launchOptions } } };
       } catch (error) {
-        return { content: errorText(error), isError: true };
+        return { content: poolError ? `${poolError} ${errorText(error)}` : errorText(error), isError: true };
       }
     }
     return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };

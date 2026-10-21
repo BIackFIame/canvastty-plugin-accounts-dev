@@ -6,6 +6,7 @@ Requires the CanvasTTY core with plugin API v2 and `launch.delegable`: the upcom
 
 ### What you'll notice
 
+- **Subscription account pools**: several of your own sign-ins per agent (Claude Code, Codex, Grok, Kimi), each signed in once by the agent's own sign-in in a card, each with its own quota (read by CanvasTTY per account home where it can) and the data level you set. A launch on `pool:<agent>` takes the signed-in account with the most quota left, skips used-up, signed-out and busy ones (one card per sign-in), and restored cards keep their account. `list_routes` and `pick_account` include them. New permissions: `limits:read`, `sessions:events`, `sessions:launch`.
 - Z.AI / BigModel (GLM Coding Plan) accounts show their quota: the service reads it from the account's own host on its own schedule (no page needs to be open), `list_routes` returns it per route with its age and source, and `pick_account` skips an account whose quota is used up until it resets. A reset that comes early (or a bonus reset) is noticed on the next read, which is due within minutes while an account is used up; an old read is shown as old and counts as unknown, never as used up. The settings page shows each account's quota with a *Read now* button.
 
 - OpenRouter is for the Assistant's Jev decisions only: a subagent on an OpenRouter account (`openrouter.ai` or a subdomain, preset or custom) is refused, and `list_routes` marks such accounts `decisions-only` with no `launchOptions`, so `pick_account` never chooses them. An agent you start yourself on one still runs.

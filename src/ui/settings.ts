@@ -8,17 +8,19 @@ import {
   type Account, type AccountsSettings, type Harness, type PresetId
 } from '../shared/accounts.ts';
 import type { CheckResult } from '../service/accounts.ts';
+import type { PoolsView, PoolMemberView } from '../pools/service.ts';
 
 interface PluginHost {
   onContext(listener: (context: { appearance: { locale: 'ru' | 'en' } }) => void): void;
   secrets: { set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> };
-  service: { request(serviceId: string, method: string, params?: unknown): Promise<unknown> };
+  service: { request(serviceId: string, method: string, params?: unknown): Promise<unknown>; onEvent?(listener: (event: { event?: string }) => void): () => void };
 }
 interface State {
   settings: AccountsSettings;
   keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>;
   checks: Record<string, CheckResult | { error: string }>;
   quota?: Record<string, QuotaLine>;
+  pools?: PoolsView;
 }
 interface QuotaLine {
   state: 'ok' | 'low' | 'exhausted' | 'presumed-reset' | 'unknown' | 'stale';
@@ -51,7 +53,19 @@ const STRINGS = {
     resets: (time: string) => `resets ${time}`,
     age: (minutes: number | null) => minutes === null ? 'not read yet' : minutes < 1 ? 'read just now' : `read ${minutes} min ago`,
     passive: 'Only limit messages are seen for this provider; its quota is not read.',
-    earlyReset: 'early reset'
+    earlyReset: 'early reset',
+    pools: 'Subscription accounts',
+    poolsLead: 'Your own sign-ins, several per agent. Each account gets its own folder inside this plugin; you sign in once in the agent\'s own sign-in (browser, password or Google) — CanvasTTY never sees the password. Launch on "<agent> pool" to get the account with the most quota left. One card per account at a time, and accounts stay on this computer.',
+    poolAccounts: (count: number) => `${count} account(s)`, poolNone: 'No accounts yet.',
+    poolAdd: 'Add account', poolTrust: 'Trust with data up to', trustUnset: 'Not set (decide later)', poolChooseTrust: 'Choose how far you trust this account first.',
+    signIn: 'Sign in', signInAgain: 'Sign in again', poolCheck: 'Check', poolSignInOpened: 'A card with the sign-in opened on the canvas.',
+    signState: { 'signed-in': 'signed in', 'signed-out': 'not signed in', expired: 'sign-in expired', unknown: 'sign-in unknown' } as Record<string, string>,
+    signingIn: 'signing in…', running: (count: number) => `${count} card running`, lastUsed: (time: string) => `last used ${time}`, neverUsed: 'not used yet',
+    poolLimitsNo: 'This CanvasTTY cannot read quotas for these accounts; they are picked as "unknown" (never as used up).',
+    poolHomeLimit: (limit: number) => `CanvasTTY reads quotas for at most ${limit} accounts per plugin; the others stay "unknown". You can still add and use them.`,
+    poolNoEvents: 'CanvasTTY sends this plugin no card events, so "one card per account" cannot be checked.',
+    poolRemoveNote: 'Removing deletes the account\'s folder with its sign-in. Claude Code on macOS keeps its sign-in in the Keychain: type /logout in a card on the account first if you want that gone too.',
+    notPooled: 'Not available as pools:'
   },
   ru: {
     title: 'Учётные записи моделей',
@@ -74,7 +88,19 @@ const STRINGS = {
     resets: (time: string) => `сброс ${time}`,
     age: (minutes: number | null) => minutes === null ? 'ещё не прочитана' : minutes < 1 ? 'прочитана только что' : `прочитана ${minutes} мин назад`,
     passive: 'У этого провайдера видны только сообщения о лимите; квота не читается.',
-    earlyReset: 'досрочный сброс'
+    earlyReset: 'досрочный сброс',
+    pools: 'Учётные записи подписок',
+    poolsLead: 'Ваши собственные входы, по нескольку на агента. У каждой учётной записи своя папка внутри этого плагина; вы входите один раз через вход самого агента (браузер, пароль или Google) — CanvasTTY пароль не видит. Запуск на «пуле <агента>» берёт учётную запись с наибольшим остатком квоты. Одна карточка на учётную запись одновременно; учётные записи остаются на этом компьютере.',
+    poolAccounts: (count: number) => `учётных записей: ${count}`, poolNone: 'Пока нет учётных записей.',
+    poolAdd: 'Добавить', poolTrust: 'Доверяю данные до', trustUnset: 'Не задано (решу позже)', poolChooseTrust: 'Сначала выберите, насколько вы доверяете этой учётной записи.',
+    signIn: 'Войти', signInAgain: 'Войти заново', poolCheck: 'Проверить', poolSignInOpened: 'На холсте открылась карточка со входом.',
+    signState: { 'signed-in': 'вход выполнен', 'signed-out': 'вход не выполнен', expired: 'вход истёк', unknown: 'вход неизвестен' } as Record<string, string>,
+    signingIn: 'идёт вход…', running: (count: number) => `запущено карточек: ${count}`, lastUsed: (time: string) => `использовалась ${time}`, neverUsed: 'ещё не использовалась',
+    poolLimitsNo: 'Этот CanvasTTY не умеет читать квоты этих учётных записей; они выбираются как «неизвестно» (но никогда как исчерпанные).',
+    poolHomeLimit: (limit: number) => `CanvasTTY читает квоты не более чем ${limit} учётных записей на плагин; у остальных квота «неизвестна». Добавлять и использовать их можно.`,
+    poolNoEvents: 'CanvasTTY не присылает плагину события карточек, поэтому правило «одна карточка на учётную запись» не проверяется.',
+    poolRemoveNote: 'Удаление стирает папку учётной записи вместе со входом. Claude Code на macOS хранит вход в Связке ключей: чтобы убрать и его, сначала наберите /logout в карточке на этой учётной записи.',
+    notPooled: 'Пулы недоступны:'
   }
 };
 const KEY_PROBLEM: Record<'en' | 'ru', Record<string, string>> = {
@@ -120,6 +146,8 @@ function saveAccounts(change: (accounts: Account[]) => Account[]): Promise<boole
       await host.service.request(SERVICE, 'save', { settings: { version: 1, accounts } });
       say(t.saved);
       await load().catch(error => say(errorText(error)));
+// The service tells the page when a sign-in card ends or a quota changes.
+host.service.onEvent?.(event => { if (event?.event === 'pools' || event?.event === 'quota') void load().catch(() => undefined); });
       return true;
     } catch (error) {
       say(`${t.notSaved}${errorText(error)}`);
@@ -289,6 +317,80 @@ function addForm(): HTMLElement {
   return box;
 }
 
+// ---- subscription pools ----
+
+const TRUSTS = ['unset', 'D0', 'D1', 'D2', 'D3'] as const;
+const poolRequest = (method: string, params: unknown): Promise<unknown> => host.service.request(SERVICE, method, params);
+const when = (at: number): string => new Date(at).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** One line per choice, nothing chosen in advance: the person's own answer (the owner's rule). */
+function trustChoice(name: string, current: string | null, onChange: (value: string) => void): HTMLElement {
+  const box = el('span', { className: 'agents', dataset: { trust: name } });
+  for (const value of TRUSTS) {
+    const input = el('input', { type: 'radio', name, value, checked: current === value });
+    input.addEventListener('change', () => { if (input.checked) onChange(value); });
+    box.append(el('label', { className: 'check' }, input, ` ${value === 'unset' ? t.trustUnset : value}`));
+  }
+  return box;
+}
+
+function poolMember(member: PoolMemberView): HTMLLIElement {
+  const item = el('li', { className: 'account', dataset: { pool: member.id } });
+  const parts = [member.signingIn ? t.signingIn : t.signState[member.signIn] ?? member.signIn];
+  if (member.running) parts.push(t.running(member.running));
+  parts.push(member.lastUsedAt ? t.lastUsed(when(member.lastUsedAt)) : t.neverUsed);
+  item.append(el('div', { className: 'row' }, el('strong', { textContent: member.label }), el('span', { className: member.signIn === 'signed-in' ? 'muted' : 'warn', textContent: parts.join(' · ') })));
+  const quota = member.quota;
+  const line = [t.quotaState[quota.state] ?? quota.state];
+  if (quota.remainingPercent !== null && quota.state !== 'exhausted') line.push(t.left(quota.remainingPercent, quota.window));
+  if (quota.resetsAt) line.push(t.resets(when(Date.parse(quota.resetsAt))));
+  line.push(t.age(quota.ageMinutes));
+  const early = member.events.filter(event => event.kind === 'early-reset').at(-1);
+  if (early) line.push(`${t.earlyReset} ${when(early.at)}`);
+  item.append(el('div', { className: 'row', dataset: { quota: member.id } }, el('span', { className: 'label', textContent: t.quota }),
+    el('span', { className: quota.state === 'exhausted' ? 'warn' : 'muted', textContent: line.join(' · ') + (member.limitsNote ? ` — ${member.limitsNote}` : '') })));
+  item.append(el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }),
+    trustChoice(`trust-${member.id}`, member.trust, value => { poolRequest('poolUpdate', { id: member.id, trust: value }).then(() => { say(t.saved); return load(); }, error => say(`${t.notSaved}${errorText(error)}`)); })));
+  item.append(el('div', { className: 'row' },
+    button(member.signIn === 'signed-in' ? t.signInAgain : t.signIn, `pool-signin-${member.id}`, () => {
+      poolRequest('poolSignIn', { accountId: member.id }).then(() => { say(t.poolSignInOpened); return load(); }, error => say(errorText(error)));
+    }),
+    button(t.poolCheck, `pool-check-${member.id}`, () => { poolRequest('poolCheck', { accountId: member.id }).then(() => load(), error => say(errorText(error))); }),
+    button(t.remove, `pool-remove-${member.id}`, () => { poolRequest('poolRemove', { accountId: member.id }).then(() => load(), error => say(errorText(error))); })));
+  return item;
+}
+
+function poolsSection(pools: PoolsView): HTMLElement {
+  const section = el('section', { className: 'pools' }, el('h2', { textContent: t.pools }), el('p', { className: 'muted', textContent: t.poolsLead }));
+  if (pools.limits === 'no') section.append(el('p', { className: 'warn', textContent: t.poolLimitsNo }));
+  if (pools.homeLimit.over) section.append(el('p', { className: 'warn', textContent: t.poolHomeLimit(pools.homeLimit.limit) }));
+  if (!pools.cardEvents) section.append(el('p', { className: 'warn', textContent: t.poolNoEvents }));
+  for (const entry of pools.providers) {
+    const block = el('div', { className: 'add', dataset: { poolProvider: entry.provider } });
+    block.append(el('div', { className: 'row' }, el('strong', { textContent: entry.label }), el('span', { className: 'muted', textContent: t.poolAccounts(entry.accounts.length) })));
+    const list = el('ul', { className: 'accounts' });
+    if (!entry.accounts.length) list.append(el('li', { className: 'muted', textContent: t.poolNone }));
+    for (const member of entry.accounts) list.append(poolMember(member));
+    block.append(list);
+    const label = el('input', { name: `pool-label-${entry.provider}`, placeholder: t.name });
+    let trust: string | null = null;
+    block.append(el('div', { className: 'row' }, field(t.name, label)),
+      el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }), trustChoice(`pool-new-trust-${entry.provider}`, null, value => { trust = value; })),
+      el('div', { className: 'row' }, button(t.poolAdd, `pool-add-${entry.provider}`, () => {
+        if (!trust) { say(t.poolChooseTrust); return; }
+        poolRequest('poolAdd', { provider: entry.provider, label: label.value.trim(), trust }).then(answer => {
+          const signIn = (answer as { signIn?: { error?: string } }).signIn;
+          say(signIn && 'error' in signIn ? String(signIn.error) : t.poolSignInOpened);
+          return load();
+        }, error => say(`${t.notSaved}${errorText(error)}`));
+      }), el('span', { className: 'muted', textContent: entry.signInHint[locale] })));
+    section.append(block);
+  }
+  section.append(el('p', { className: 'muted', textContent: t.poolRemoveNote }),
+    el('p', { className: 'muted', textContent: `${t.notPooled} ${Object.values(pools.notPooled).join(' ')}` }));
+  return section;
+}
+
 function render(): void {
   if (!state) return;
   const list = el('ul', { className: 'accounts' });
@@ -300,7 +402,8 @@ function render(): void {
     list,
     el('h2', { textContent: t.add }),
     addForm(),
-    el('p', { className: 'muted', textContent: t.keyWriteOnly })
+    el('p', { className: 'muted', textContent: t.keyWriteOnly }),
+    ...(state.pools ? [poolsSection(state.pools)] : [])
   );
 }
 
