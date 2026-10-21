@@ -209,15 +209,18 @@ export function validateAccount(value: unknown): Account {
   if (raw.brokerable !== undefined && typeof raw.brokerable !== 'boolean') throw new Error('brokerable must be true or false.');
   const brokerable = raw.brokerable === true;
   if (brokerable && !brokerableShape({ preset: preset.id, baseUrl })) {
-    throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : 'Only an API account with a key can be used by other extensions.');
+    throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : 'Only an https API account with a key can be used by other extensions.');
   }
   return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...(responsesApi ? { responsesApi } : {}), agents, ...(brokerable ? { brokerable } : {}) };
 }
 
-/** Accounts that may be offered for brokered requests at all: an API (not Ollama) account with a key, not OpenRouter. */
+/** Accounts that may be offered for brokered requests at all: an https API (not Ollama) account with a key, not OpenRouter. */
 export function brokerableShape(account: Pick<Account, 'preset' | 'baseUrl'>): boolean {
   const protocol = protocolOf(account);
-  return (protocol === 'openai' || protocol === 'anthropic') && !decisionsOnlyAccount(account);
+  // CanvasTTY sends a key over https only (a process could hold a loopback port), so a local API stays this plugin's.
+  let https = false;
+  try { https = new URL(account.baseUrl).protocol === 'https:'; } catch { /* not a URL */ }
+  return (protocol === 'openai' || protocol === 'anthropic') && https && !decisionsOnlyAccount(account);
 }
 
 /** What CanvasTTY's `canvastty.broker.offer` lists for one account (the host adds the key; the caller never sees it). */

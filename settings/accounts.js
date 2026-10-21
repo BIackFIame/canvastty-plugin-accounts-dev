@@ -59,7 +59,12 @@
   }
   function brokerableShape(account) {
     const protocol = protocolOf(account);
-    return (protocol === "openai" || protocol === "anthropic") && !decisionsOnlyAccount(account);
+    let https = false;
+    try {
+      https = new URL(account.baseUrl).protocol === "https:";
+    } catch {
+    }
+    return (protocol === "openai" || protocol === "anthropic") && https && !decisionsOnlyAccount(account);
   }
   function newAccountId(label, taken) {
     const base = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 32) || "account";

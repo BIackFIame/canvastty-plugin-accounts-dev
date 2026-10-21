@@ -423,13 +423,18 @@ function validateAccount(value) {
   if (raw.brokerable !== void 0 && typeof raw.brokerable !== "boolean") throw new Error("brokerable must be true or false.");
   const brokerable = raw.brokerable === true;
   if (brokerable && !brokerableShape({ preset: preset.id, baseUrl })) {
-    throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : "Only an API account with a key can be used by other extensions.");
+    throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : "Only an https API account with a key can be used by other extensions.");
   }
   return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...responsesApi ? { responsesApi } : {}, agents, ...brokerable ? { brokerable } : {} };
 }
 function brokerableShape(account) {
   const protocol = protocolOf(account);
-  return (protocol === "openai" || protocol === "anthropic") && !decisionsOnlyAccount(account);
+  let https = false;
+  try {
+    https = new URL(account.baseUrl).protocol === "https:";
+  } catch {
+  }
+  return (protocol === "openai" || protocol === "anthropic") && https && !decisionsOnlyAccount(account);
 }
 function brokerOfferOf(account, flatRate) {
   if (account.brokerable !== true || !brokerableShape(account)) return null;

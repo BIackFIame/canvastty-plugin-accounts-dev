@@ -43,6 +43,8 @@ test('validation: brokerable is off unless ticked, and never for Ollama or OpenR
   assert.equal(validateAccount({ ...glmPlan, brokerable: true }).brokerable, true);
   assert.throws(() => validateAccount({ ...glmPlan, brokerable: 'yes' }), /true or false/);
   assert.throws(() => validateAccount({ ...local, brokerable: true }), /API account with a key/);
+  // A key goes over https only: an API on this computer (plain http) cannot be offered.
+  assert.throws(() => validateAccount({ ...glmOpenAi, preset: 'custom-openai', baseUrl: 'http://127.0.0.1:8080/v1', brokerable: true }), /https API account/);
   assert.throws(() => validateAccount({ ...openrouter, brokerable: true }), /OpenRouter is for Jev/);
   assert.throws(() => validateAccount({ ...glmOpenAi, preset: 'custom-openai', baseUrl: 'https://eu.openrouter.ai/api/v1', brokerable: true }), /OpenRouter is for Jev/);
 });
