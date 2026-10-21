@@ -384,7 +384,7 @@ var plainText = (value, max) => typeof value === "string" && value.trim().length
 function validateAccount(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("An account must be an object.");
   const raw = value;
-  const unknown = Object.keys(raw).find((key) => !["id", "label", "preset", "baseUrl", "model", "responsesApi", "agents"].includes(key));
+  const unknown = Object.keys(raw).find((key) => !["id", "label", "preset", "baseUrl", "model", "responsesApi", "agents", "brokerable"].includes(key));
   if (unknown) throw new Error(`Unknown account field ${unknown.slice(0, 40)}.`);
   if (typeof raw.id !== "string" || !ID.test(raw.id)) throw new Error("Account id must be 1\u201340 lowercase letters, digits or dashes.");
   if (!plainText(raw.label, 80)) throw new Error("Give the account a name (at most 80 characters).");
@@ -420,7 +420,31 @@ function validateAccount(value) {
     throw new Error(harnessSupport(refused, candidate).ok === false && harnessSupport(refused, candidate).reason === "responses-api" ? "Codex needs an endpoint with the OpenAI Responses API; tick it only if the provider documents /responses." : `${HARNESS_LABELS[refused]} cannot run on ${preset.label}.`);
   }
   if (!agents.length) throw new Error("Choose at least one agent for the account.");
-  return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...responsesApi ? { responsesApi } : {}, agents };
+  if (raw.brokerable !== void 0 && typeof raw.brokerable !== "boolean") throw new Error("brokerable must be true or false.");
+  const brokerable = raw.brokerable === true;
+  if (brokerable && !brokerableShape({ preset: preset.id, baseUrl })) {
+    throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : "Only an API account with a key can be used by other extensions.");
+  }
+  return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...responsesApi ? { responsesApi } : {}, agents, ...brokerable ? { brokerable } : {} };
+}
+function brokerableShape(account) {
+  const protocol = protocolOf(account);
+  return (protocol === "openai" || protocol === "anthropic") && !decisionsOnlyAccount(account);
+}
+function brokerOfferOf(account, flatRate) {
+  if (account.brokerable !== true || !brokerableShape(account)) return null;
+  const protocol = protocolOf(account);
+  return {
+    id: account.id,
+    label: account.label,
+    protocol,
+    baseUrl: protocol === "anthropic" ? `${account.baseUrl}/v1` : account.baseUrl,
+    paths: protocol === "anthropic" ? ["/messages"] : ["/chat/completions", ...account.responsesApi ? ["/responses"] : [], "/models"],
+    models: [account.model],
+    secretKey: secretKeyOf(account.id),
+    auth: "bearer",
+    flatRate
+  };
 }
 function validateSettings(value) {
   if (value === null || value === void 0) return { version: 1, accounts: [] };
@@ -2964,6 +2988,48 @@ var AccountsService = class {
     }
     throw new Error("This plugin shares accounts.routes and accounts.quota only.");
   }
+  // ---- brokered requests (CanvasTTY B6) ----
+  /**
+   * `canvastty.broker.offer`: the accounts the person marked for other extensions, whose key is saved for the
+   * account's current address. CanvasTTY reads the key itself (`secretKey`) and asks this again before every request,
+   * so unmarking an account, removing its key or changing its address ends it at once. Never a key.
+   */
+  brokerOffer() {
+    if (this.unread) return [];
+    return this.settings.accounts.flatMap((account) => {
+      if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return [];
+      const offer = brokerOfferOf(account, quotaUrlOf(account) !== null);
+      return offer ? [offer] : [];
+    });
+  }
+  /**
+   * `canvastty.broker.admit { ref, caller, model }`: this plugin's quota decides. A marked account whose plan is used
+   * up (by a read at 100 % or a limit error) is refused until it resets; otherwise its quota is read again when old.
+   */
+  brokerAdmit(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    const account = this.find(values.ref);
+    const offer = account && this.keyOrigins[account.id] === originOf(account.baseUrl) ? brokerOfferOf(account, false) : null;
+    if (!account || !offer) return { ok: false, reason: "This account is not offered to other extensions." };
+    if (typeof values.model !== "string" || !offer.models.includes(values.model)) return { ok: false, reason: `${account.label} runs ${account.model} only.` };
+    const view = this.quota.view(account);
+    if (view?.state === "exhausted") {
+      const caller = values.caller && typeof values.caller === "object" ? String(values.caller.pluginId ?? "").slice(0, 80) : "";
+      this.host.log("info", `${account.id}: a brokered request${caller ? ` from ${caller}` : ""} was refused, the plan is used up.`);
+      return { ok: false, reason: `${account.label}: plan quota used up${view.resetsAt ? ` until ${new Date(view.resetsAt).toISOString()}` : ""}.` };
+    }
+    this.quota.demand([account]);
+    return { ok: true };
+  }
+  /** `canvastty.broker.settle`: a request through the account ended; the quota learns it was used. */
+  brokerSettle(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    const account = this.find(values.ref);
+    if (!account) return null;
+    if (values.status === "ok") this.quota.used(account);
+    else if (values.httpStatus === 429 || values.httpStatus === 403) this.quota.demand([account]);
+    return null;
+  }
   // ---- orchestrator tools ----
   facts() {
     const detections = /* @__PURE__ */ new Map();
@@ -3082,6 +3148,10 @@ serve({
     "canvastty.tools.call": async (params) => (await service()).tool(String(params.tool), params.input ?? {}),
     // A shared read another plugin's service asked for; CanvasTTY sends it only for a pair the person approved.
     "canvastty.shares.read": async (params) => (await service()).shareRead(params),
+    // Brokered requests: CanvasTTY asks which marked accounts are offered, admits each request here and settles it.
+    "canvastty.broker.offer": async () => (await service()).brokerOffer(),
+    "canvastty.broker.admit": async (params) => (await service()).brokerAdmit(params),
+    "canvastty.broker.settle": async (params) => (await service()).brokerSettle(params),
     // The settings page.
     state: async () => (await service()).state(),
     save: async (params) => (await service()).save(params.settings),

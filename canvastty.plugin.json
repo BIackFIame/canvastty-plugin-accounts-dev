@@ -19,18 +19,18 @@
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 8965,
-      "sha256": "f303d3c47a07618319e02fe5ba5b978d017fe740dce9210e6efe49e840a9ec35"
+      "bytes": 9788,
+      "sha256": "662e1d726bf2d9aa0f9b4ed46e7a6a629f5c9b92da6646cc3a03bc3601c388b2"
     },
     {
       "path": "README.ru.md",
-      "bytes": 14295,
-      "sha256": "fe1e84aaaa96227f622fab1b13be0005c30d5b932d205667a276da5503c9d6ce"
+      "bytes": 15770,
+      "sha256": "7aabf85dcb20fd34b3e9b1bf6e38104e02821cc69a8cd4ce37de1f0d225bd9e3"
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 160404,
-      "sha256": "c8a4f132bcff36a0af39b4a606e487ab66da7869bb882690a8b8c7b8db157e38"
+      "bytes": 164528,
+      "sha256": "6c4c5da846f20bee50a5b20f18a6d4bb440a311e1029d5983b670abc27e97402"
     },
     {
       "path": "settings/accounts.html",
@@ -39,8 +39,8 @@
     },
     {
       "path": "settings/accounts.js",
-      "bytes": 43786,
-      "sha256": "51292163ae31fd239045cb87851856890f6ce4338ec5c8975569fd6eaa4622e7"
+      "bytes": 46282,
+      "sha256": "aaa9e6ac2b5d9a1bac22d5485c34a2c9532483d51d5db8de72f8f278fac27603"
     },
     {
       "path": "settings/accounts.css",
@@ -54,6 +54,7 @@
       "title": "Accounts",
       "description": "Prepares launches on a chosen model account and answers orchestrators' route questions.",
       "entry": "services/accounts.mjs",
+      "brokerable": true,
       "launch": {
         "appliesTo": [
           "claude",

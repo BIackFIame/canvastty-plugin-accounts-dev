@@ -44,6 +44,16 @@ and age, confidence), and `pick_account` skips an account whose quota is used up
 shows room before the predicted reset clears the exhaustion at once (an early or bonus reset). The state survives
 restarts (`quota.json` in the plugin's data folder, without keys). Other providers' quotas are not read.
 
+### Other extensions using an account (brokered requests)
+
+Tick *Other extensions may send model requests through this account* on an API account (not Ollama, never
+OpenRouter) to let another extension, for example the Assistant's Auto (Jev) router, send single model requests through
+it. CanvasTTY adds the key itself and sends the request only to the account's address: the other extension never sees
+the key. Nothing is offered by default, and ticking it is not enough: you also allow each extension under
+**Settings → Agents → Extension native code → CanvasTTY Accounts**. This plugin admits every request against the
+account's quota (a used-up GLM plan is refused until it resets) and counts it afterwards. Check that the plan's terms
+allow it. Needs a CanvasTTY with brokered requests (`brokerable` services).
+
 ### Subscription accounts (pools)
 
 Several of your own sign-ins per agent (Claude Code, Codex, Grok, Kimi), for example a handful of Claude accounts or

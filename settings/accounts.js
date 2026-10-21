@@ -28,6 +28,16 @@
     { id: "custom-anthropic", label: "Other Anthropic-compatible API", protocol: "anthropic", baseUrl: null, model: "" },
     { id: "custom-openai", label: "Other OpenAI-compatible API", protocol: "openai", baseUrl: null, model: "" }
   ]);
+  function isDecisionOnlyHost(url) {
+    let host2;
+    try {
+      host2 = new URL(url).hostname.toLowerCase().replace(/\.+$/u, "");
+    } catch {
+      return true;
+    }
+    return host2 === "openrouter.ai" || host2.endsWith(".openrouter.ai");
+  }
+  var decisionsOnlyAccount = (account) => account.preset === "openrouter-openai" || account.preset === "openrouter-anthropic" || isDecisionOnlyHost(account.baseUrl);
   var EMPTY_SETTINGS = Object.freeze({ version: 1, accounts: [] });
   var presetOf = (account) => PRESETS.find((preset) => preset.id === account.preset);
   var protocolOf = (account) => presetOf(account).protocol;
@@ -46,6 +56,10 @@
     if (!protocols[harness].includes(protocol)) return { ok: false, reason: "protocol" };
     if (harness === "codex" && protocol === "openai" && account.responsesApi !== true) return { ok: false, reason: "responses-api" };
     return { ok: true };
+  }
+  function brokerableShape(account) {
+    const protocol = protocolOf(account);
+    return (protocol === "openai" || protocol === "anthropic") && !decisionsOnlyAccount(account);
   }
   function newAccountId(label, taken) {
     const base = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 32) || "account";
@@ -68,6 +82,7 @@
       model: "Model",
       responses: "The endpoint has the OpenAI Responses API (needed for Codex)",
       agents: "Agents",
+      brokerable: "Other extensions may send model requests through this account (CanvasTTY adds the key; they never see it). Allow each extension under Settings \u2192 Agents \u2192 Extension native code \u2192 Accounts. Check that the plan's terms allow it.",
       saveChanges: "Save changes",
       remove: "Remove",
       check: "Check",
@@ -136,6 +151,7 @@
       model: "\u041C\u043E\u0434\u0435\u043B\u044C",
       responses: "\u0423 \u0430\u0434\u0440\u0435\u0441\u0430 \u0435\u0441\u0442\u044C OpenAI Responses API (\u043D\u0443\u0436\u0435\u043D \u0434\u043B\u044F Codex)",
       agents: "\u0410\u0433\u0435\u043D\u0442\u044B",
+      brokerable: "\u0414\u0440\u0443\u0433\u0438\u0435 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u044F \u043C\u043E\u0433\u0443\u0442 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u044C \u0437\u0430\u043F\u0440\u043E\u0441\u044B \u043A \u043C\u043E\u0434\u0435\u043B\u0438 \u0447\u0435\u0440\u0435\u0437 \u044D\u0442\u0443 \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C (\u043A\u043B\u044E\u0447 \u043F\u043E\u0434\u0441\u0442\u0430\u0432\u043B\u044F\u0435\u0442 CanvasTTY, \u043E\u043D\u0438 \u0435\u0433\u043E \u043D\u0435 \u0432\u0438\u0434\u044F\u0442). \u041A\u0430\u0436\u0434\u043E\u0435 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0430\u0435\u0442\u0441\u044F \u0432 \u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u2192 \u0410\u0433\u0435\u043D\u0442\u044B \u2192 \u041D\u0430\u0442\u0438\u0432\u043D\u044B\u0439 \u043A\u043E\u0434 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u0439 \u2192 Accounts. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435, \u0447\u0442\u043E \u0443\u0441\u043B\u043E\u0432\u0438\u044F \u0442\u0430\u0440\u0438\u0444\u0430 \u044D\u0442\u043E \u0434\u043E\u043F\u0443\u0441\u043A\u0430\u044E\u0442.",
       saveChanges: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F",
       remove: "\u0423\u0434\u0430\u043B\u0438\u0442\u044C",
       check: "\u041F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C",
@@ -315,10 +331,13 @@
     const model = el("input", { value: account.model, name: `model-${account.id}` });
     const url = el("input", { value: account.baseUrl, name: `url-${account.id}`, disabled: preset.id === "ollama-cloud" });
     const responses = el("input", { type: "checkbox", checked: account.responsesApi === true, name: `responses-${account.id}` });
+    const brokerable = el("input", { type: "checkbox", checked: account.brokerable === true, name: `brokerable-${account.id}` });
+    const canBroker = brokerableShape(account);
     const agents = agentBoxes(account.id, account, account.agents);
     const edits = el("div", { className: "row" }, field(t.name, label), field(t.model, model), field(t.address, url));
     if (preset.protocol === "openai") edits.append(el("label", { className: "check" }, responses, ` ${t.responses}`));
     item.append(edits, el("div", { className: "row" }, el("span", { className: "label", textContent: t.agents }), agents.node));
+    if (canBroker) item.append(el("div", { className: "row" }, el("label", { className: "check" }, brokerable, ` ${t.brokerable}`)));
     item.append(el(
       "div",
       { className: "row" },
@@ -328,7 +347,8 @@
         model: model.value.trim(),
         baseUrl: url.value.trim(),
         agents: agents.value(),
-        ...preset.protocol === "openai" ? { responsesApi: responses.checked } : {}
+        ...preset.protocol === "openai" ? { responsesApi: responses.checked } : {},
+        brokerable: canBroker && brokerable.checked
       }))),
       button(t.check, `check-${account.id}`, () => {
         say(t.checking);

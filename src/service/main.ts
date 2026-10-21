@@ -45,6 +45,10 @@ serve({
     'canvastty.tools.call': async params => (await service()).tool(String(params.tool), (params.input ?? {}) as Record<string, unknown>),
     // A shared read another plugin's service asked for; CanvasTTY sends it only for a pair the person approved.
     'canvastty.shares.read': async params => (await service()).shareRead(params),
+    // Brokered requests: CanvasTTY asks which marked accounts are offered, admits each request here and settles it.
+    'canvastty.broker.offer': async () => (await service()).brokerOffer(),
+    'canvastty.broker.admit': async params => (await service()).brokerAdmit(params),
+    'canvastty.broker.settle': async params => (await service()).brokerSettle(params),
     // The settings page.
     state: async () => (await service()).state(),
     save: async params => (await service()).save(params.settings),

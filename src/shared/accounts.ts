@@ -75,6 +75,12 @@ export interface Account {
   responsesApi?: boolean;
   /** The agent CLIs the person allows on this account (each one supported by its protocol). */
   agents: Harness[];
+  /**
+   * The person lets other extensions send single model requests through this account (CanvasTTY's brokered
+   * requests: CanvasTTY adds the key itself, the other extension never sees it, and the person still allows each
+   * extension in CanvasTTY's settings). Off unless the person ticks it; only API accounts with a key, never OpenRouter.
+   */
+  brokerable?: boolean;
 }
 
 export interface AccountsSettings { version: 1; accounts: Account[] }
@@ -160,7 +166,7 @@ const plainText = (value: unknown, max: number): value is string => typeof value
 export function validateAccount(value: unknown): Account {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('An account must be an object.');
   const raw = value as Record<string, unknown>;
-  const unknown = Object.keys(raw).find(key => !['id', 'label', 'preset', 'baseUrl', 'model', 'responsesApi', 'agents'].includes(key));
+  const unknown = Object.keys(raw).find(key => !['id', 'label', 'preset', 'baseUrl', 'model', 'responsesApi', 'agents', 'brokerable'].includes(key));
   if (unknown) throw new Error(`Unknown account field ${unknown.slice(0, 40)}.`);
   if (typeof raw.id !== 'string' || !ID.test(raw.id)) throw new Error('Account id must be 1–40 lowercase letters, digits or dashes.');
   if (!plainText(raw.label, 80)) throw new Error('Give the account a name (at most 80 characters).');
@@ -200,7 +206,52 @@ export function validateAccount(value: unknown): Account {
       : `${HARNESS_LABELS[refused]} cannot run on ${preset.label}.`);
   }
   if (!agents.length) throw new Error('Choose at least one agent for the account.');
-  return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...(responsesApi ? { responsesApi } : {}), agents };
+  if (raw.brokerable !== undefined && typeof raw.brokerable !== 'boolean') throw new Error('brokerable must be true or false.');
+  const brokerable = raw.brokerable === true;
+  if (brokerable && !brokerableShape({ preset: preset.id, baseUrl })) {
+    throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : 'Only an API account with a key can be used by other extensions.');
+  }
+  return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...(responsesApi ? { responsesApi } : {}), agents, ...(brokerable ? { brokerable } : {}) };
+}
+
+/** Accounts that may be offered for brokered requests at all: an API (not Ollama) account with a key, not OpenRouter. */
+export function brokerableShape(account: Pick<Account, 'preset' | 'baseUrl'>): boolean {
+  const protocol = protocolOf(account);
+  return (protocol === 'openai' || protocol === 'anthropic') && !decisionsOnlyAccount(account);
+}
+
+/** What CanvasTTY's `canvastty.broker.offer` lists for one account (the host adds the key; the caller never sees it). */
+export interface BrokerOffer {
+  id: string;
+  label: string;
+  protocol: 'openai' | 'anthropic';
+  baseUrl: string;
+  paths: string[];
+  models: string[];
+  secretKey: string;
+  auth: 'bearer';
+  flatRate: boolean;
+}
+
+/**
+ * The offer for one account the person marked. Anthropic-compatible endpoints take `<base>/v1/messages` (as Claude
+ * Code calls them, with the key as a Bearer token); OpenAI-compatible ones `<base>/chat/completions`, `/models` and,
+ * when the endpoint has it, `/responses`.
+ */
+export function brokerOfferOf(account: Account, flatRate: boolean): BrokerOffer | null {
+  if (account.brokerable !== true || !brokerableShape(account)) return null;
+  const protocol = protocolOf(account) as 'openai' | 'anthropic';
+  return {
+    id: account.id,
+    label: account.label,
+    protocol,
+    baseUrl: protocol === 'anthropic' ? `${account.baseUrl}/v1` : account.baseUrl,
+    paths: protocol === 'anthropic' ? ['/messages'] : ['/chat/completions', ...(account.responsesApi ? ['/responses'] : []), '/models'],
+    models: [account.model],
+    secretKey: secretKeyOf(account.id),
+    auth: 'bearer',
+    flatRate
+  };
 }
 
 /** The saved settings; anything invalid is refused as a whole (the page shows why). */

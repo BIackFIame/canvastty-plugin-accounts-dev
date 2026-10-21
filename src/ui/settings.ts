@@ -4,7 +4,7 @@
 // exists and for which address it was saved.
 import { apiKeyProblem } from '../shared/apiKeyHygiene.ts';
 import {
-  HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, harnessSupport, newAccountId, secretKeyOf,
+  HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, brokerableShape, harnessSupport, newAccountId, secretKeyOf,
   type Account, type AccountsSettings, type Harness, type PresetId
 } from '../shared/accounts.ts';
 import type { CheckResult } from '../service/accounts.ts';
@@ -37,6 +37,7 @@ const STRINGS = {
     lead: 'Run Claude Code, Codex, OpenCode, Qwen Code or Kimi on another model: a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API. An account is used only when you choose it in the launcher (Advanced → Use CanvasTTY Accounts → Model account) or an orchestrator passes it to a subagent; the agents\' own sign-ins stay untouched, and nothing is written to ~/.claude, ~/.codex or ~/.ollama.',
     none: 'No accounts yet.', add: 'Add account', provider: 'Provider', name: 'Name', address: 'Address', model: 'Model',
     responses: 'The endpoint has the OpenAI Responses API (needed for Codex)', agents: 'Agents',
+    brokerable: 'Other extensions may send model requests through this account (CanvasTTY adds the key; they never see it). Allow each extension under Settings → Agents → Extension native code → Accounts. Check that the plan\'s terms allow it.',
     saveChanges: 'Save changes', remove: 'Remove', check: 'Check', checking: 'Checking…',
     key: 'API key', keyOk: 'key saved', keyMissing: 'no key', keyOther: 'key saved for another address — save it again', saveKey: 'Save key', removeKey: 'Remove key',
     keyWriteOnly: 'Keys are write-only: they are kept in CanvasTTY\'s encrypted plugin secrets and handed to the agent by CanvasTTY.',
@@ -72,6 +73,7 @@ const STRINGS = {
     lead: 'Запускайте Claude Code, Codex, OpenCode, Qwen Code или Kimi на другой модели: локальной в Ollama, в Ollama Cloud, Z.AI, MiniMax, OpenRouter или любом совместимом API. Учётная запись используется, только когда вы выбрали её в окне запуска (Дополнительно → Use CanvasTTY Accounts → Model account) или оркестратор передал её субагенту; собственные входы агентов не меняются, в ~/.claude, ~/.codex и ~/.ollama ничего не пишется.',
     none: 'Пока нет учётных записей.', add: 'Добавить', provider: 'Провайдер', name: 'Название', address: 'Адрес', model: 'Модель',
     responses: 'У адреса есть OpenAI Responses API (нужен для Codex)', agents: 'Агенты',
+    brokerable: 'Другие расширения могут отправлять запросы к модели через эту учётную запись (ключ подставляет CanvasTTY, они его не видят). Каждое расширение разрешается в Настройки → Агенты → Нативный код расширений → Accounts. Проверьте, что условия тарифа это допускают.',
     saveChanges: 'Сохранить изменения', remove: 'Удалить', check: 'Проверить', checking: 'Проверяю…',
     key: 'API-ключ', keyOk: 'ключ сохранён', keyMissing: 'нет ключа', keyOther: 'ключ сохранён для другого адреса — сохраните заново', saveKey: 'Сохранить ключ', removeKey: 'Удалить ключ',
     keyWriteOnly: 'Ключи только записываются: они хранятся в зашифрованных секретах плагина, и агенту их передаёт сам CanvasTTY.',
@@ -218,14 +220,19 @@ function accountItem(account: Account): HTMLLIElement {
   const model = el('input', { value: account.model, name: `model-${account.id}` });
   const url = el('input', { value: account.baseUrl, name: `url-${account.id}`, disabled: preset.id === 'ollama-cloud' });
   const responses = el('input', { type: 'checkbox', checked: account.responsesApi === true, name: `responses-${account.id}` });
+  // Off unless the person ticks it, account by account (CanvasTTY's brokered requests).
+  const brokerable = el('input', { type: 'checkbox', checked: account.brokerable === true, name: `brokerable-${account.id}` });
+  const canBroker = brokerableShape(account);
   const agents = agentBoxes(account.id, account, account.agents);
   const edits = el('div', { className: 'row' }, field(t.name, label), field(t.model, model), field(t.address, url));
   if (preset.protocol === 'openai') edits.append(el('label', { className: 'check' }, responses, ` ${t.responses}`));
   item.append(edits, el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.agents }), agents.node));
+  if (canBroker) item.append(el('div', { className: 'row' }, el('label', { className: 'check' }, brokerable, ` ${t.brokerable}`)));
   item.append(el('div', { className: 'row' },
     button(t.saveChanges, `save-${account.id}`, () => void saveAccounts(accounts => accounts.map(entry => entry.id !== account.id ? entry : {
       ...entry, label: label.value.trim(), model: model.value.trim(), baseUrl: url.value.trim(), agents: agents.value(),
-      ...(preset.protocol === 'openai' ? { responsesApi: responses.checked } : {})
+      ...(preset.protocol === 'openai' ? { responsesApi: responses.checked } : {}),
+      brokerable: canBroker && brokerable.checked
     }))),
     button(t.check, `check-${account.id}`, () => {
       say(t.checking);

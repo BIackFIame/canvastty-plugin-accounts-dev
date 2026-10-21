@@ -2,7 +2,7 @@ import type { Host } from '../rpc.ts';
 import { apiKeyProblem, apiKeyProblemMessage, envSubstitutionProblem, openCodeKeyRefusal } from '../shared/apiKeyHygiene.ts';
 import {
   DECISIONS_ONLY_REASON, HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, decisionsOnlyAccount, harnessSupport, loadSettings, ollamaShapeOf,
-  ollamaWireModel, protocolOf, secretKeyOf, validateSettings, type Account, type AccountsSettings, type Harness
+  brokerOfferOf, ollamaWireModel, protocolOf, secretKeyOf, validateSettings, type Account, type AccountsSettings, type BrokerOffer, type Harness
 } from '../shared/accounts.ts';
 import { buildHarnessLaunch, codexTrustArguments, type Contribution } from '../launch/harness.ts';
 import { effortArguments } from '../launch/effort.ts';
@@ -485,6 +485,53 @@ export class AccountsService {
       };
     }
     throw new Error('This plugin shares accounts.routes and accounts.quota only.');
+  }
+
+  // ---- brokered requests (CanvasTTY B6) ----
+
+  /**
+   * `canvastty.broker.offer`: the accounts the person marked for other extensions, whose key is saved for the
+   * account's current address. CanvasTTY reads the key itself (`secretKey`) and asks this again before every request,
+   * so unmarking an account, removing its key or changing its address ends it at once. Never a key.
+   */
+  brokerOffer(): BrokerOffer[] {
+    if (this.unread) return [];
+    return this.settings.accounts.flatMap(account => {
+      if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return [];
+      const offer = brokerOfferOf(account, quotaUrlOf(account) !== null);
+      return offer ? [offer] : [];
+    });
+  }
+
+  /**
+   * `canvastty.broker.admit { ref, caller, model }`: this plugin's quota decides. A marked account whose plan is used
+   * up (by a read at 100 % or a limit error) is refused until it resets; otherwise its quota is read again when old.
+   */
+  brokerAdmit(params: unknown): { ok: true } | { ok: false; reason: string } {
+    const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    const account = this.find(values.ref);
+    const offer = account && this.keyOrigins[account.id] === originOf(account.baseUrl) ? brokerOfferOf(account, false) : null;
+    if (!account || !offer) return { ok: false, reason: 'This account is not offered to other extensions.' };
+    if (typeof values.model !== 'string' || !offer.models.includes(values.model)) return { ok: false, reason: `${account.label} runs ${account.model} only.` };
+    const view = this.quota.view(account);
+    if (view?.state === 'exhausted') {
+      const caller = values.caller && typeof values.caller === 'object' ? String((values.caller as { pluginId?: unknown }).pluginId ?? '').slice(0, 80) : '';
+      this.host.log('info', `${account.id}: a brokered request${caller ? ` from ${caller}` : ''} was refused, the plan is used up.`);
+      return { ok: false, reason: `${account.label}: plan quota used up${view.resetsAt ? ` until ${new Date(view.resetsAt).toISOString()}` : ''}.` };
+    }
+    this.quota.demand([account]);
+    return { ok: true };
+  }
+
+  /** `canvastty.broker.settle`: a request through the account ended; the quota learns it was used. */
+  brokerSettle(params: unknown): null {
+    const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    const account = this.find(values.ref);
+    if (!account) return null;
+    if (values.status === 'ok') this.quota.used(account);
+    // A refusal by the provider may be the plan's limit: read the quota again (bounded by the reader's own schedule).
+    else if (values.httpStatus === 429 || values.httpStatus === 403) this.quota.demand([account]);
+    return null;
   }
 
   // ---- orchestrator tools ----
