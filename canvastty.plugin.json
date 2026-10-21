@@ -15,18 +15,18 @@
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 6052,
-      "sha256": "b8428dc0bdafe6e47fff88e612b975db3b933bc8f4e0a33d768ac082bb86f810"
+      "bytes": 7087,
+      "sha256": "927cc94227523041088375c201c5360647a00a1a10fa3652cff330e4b3ec2115"
     },
     {
       "path": "README.ru.md",
-      "bytes": 9460,
-      "sha256": "a66be42590864000b7a908a16849a59f034ab46714d9a59d2a4f01f852dbfc52"
+      "bytes": 11283,
+      "sha256": "c87541858a84f82a494f4f0f09d18fca519f5e7b3214a9cd57c5a92aa55c3c12"
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 66843,
-      "sha256": "5f7c9fe1287271c55453f8807ca47c77af229cc5150c372d37d4c2a3d583029e"
+      "bytes": 99464,
+      "sha256": "f742ec7bc488f2ef476264b015acb1a18cadd6438d6dc89fdebd145cd032bb91"
     },
     {
       "path": "settings/accounts.html",
@@ -35,13 +35,13 @@
     },
     {
       "path": "settings/accounts.js",
-      "bytes": 25038,
-      "sha256": "ea3c7e3046619c959faf910d6b754dab5c1ca6e103691f4ac8c113c32494102d"
+      "bytes": 28980,
+      "sha256": "c16b95c343ccd1b71fb8bcf8a0b6d41073e1ad99e0bc3bfdf6487f9372ebb87a"
     },
     {
       "path": "settings/accounts.css",
-      "bytes": 1314,
-      "sha256": "614862a392abaa3d7f254be45d8ba535325f0fe38d58e73459ab029c2306502a"
+      "bytes": 1342,
+      "sha256": "ff091a6c1947740a212c4565da40d82e0e1ef6520b6adfe8673f05fd55dc1413"
     }
   ],
   "services": [
@@ -121,7 +121,7 @@
       "tools": [
         {
           "name": "list_routes",
-          "description": "List the person's model accounts you can start a subagent on: agent (provider), account, model, where it runs, and whether it is ready now (key saved, Ollama running, model installed with tool calling) or why not. A ready route has launchOptions: pass them unchanged to spawn_agent with the same provider. Each agent's own CLI sign-in is not listed: spawn_agent without launchOptions uses it.",
+          "description": "List the person's model accounts you can start a subagent on: agent (provider), account, model, where it runs, and whether it is ready now (key saved, Ollama running, model installed with tool calling, plan quota not used up) or why not, and the plan's quota where it is known (percent left, reset time, how old the read is; unknown is not used up). A ready route has launchOptions: pass them unchanged to spawn_agent with the same provider. Each agent's own CLI sign-in is not listed: spawn_agent without launchOptions uses it.",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -146,7 +146,7 @@
         },
         {
           "name": "pick_account",
-          "description": "Pick the model account a subagent of this agent should run on: the first ready one in the person's order, skipping accounts that cannot work right now (no key, Ollama not running, model missing), with the reason. Returns spawn: { provider, launchOptions } to pass to spawn_agent. An error means no account is ready: spawn without launchOptions to use the agent's own sign-in, or ask the person.",
+          "description": "Pick the model account a subagent of this agent should run on: the first ready one in the person's order, skipping accounts that cannot work right now (no key, Ollama not running, model missing, plan quota used up), with the reason. Returns spawn: { provider, launchOptions } to pass to spawn_agent. An error means no account is ready: spawn without launchOptions to use the agent's own sign-in, or ask the person.",
           "inputSchema": {
             "type": "object",
             "properties": {

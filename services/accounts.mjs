@@ -25,8 +25,8 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
   let blocked = false;
   let dropped = 0;
   let onFlushed = null;
-  const write = (text) => {
-    if (output.write(text) === false && typeof output.once === "function") {
+  const write = (text2) => {
+    if (output.write(text2) === false && typeof output.once === "function") {
       blocked = true;
       output.once("drain", flush);
     }
@@ -47,12 +47,12 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
     if (!blocked && !queue.length) onFlushed?.();
   }
   const send = (message, droppable = false) => {
-    const text = `${JSON.stringify({ jsonrpc: "2.0", ...message })}
+    const text2 = `${JSON.stringify({ jsonrpc: "2.0", ...message })}
 `;
-    const bytes = Buffer.byteLength(text);
+    const bytes = Buffer.byteLength(text2);
     if (bytes > limit.frameBytes && message.method !== "log") return false;
     if (!blocked) {
-      write(text);
+      write(text2);
       return true;
     }
     if (droppable) {
@@ -72,7 +72,7 @@ function serve({ methods, notifications = {}, onInitialize, input = process.stdi
       }
       held += bytes;
     }
-    queue.push({ text, bytes, droppable });
+    queue.push({ text: text2, bytes, droppable });
     return true;
   };
   const host = {
@@ -270,8 +270,8 @@ function canonicalOllamaName(name) {
   return name.slice(slash + 1).includes(":") ? name : `${name}:latest`;
 }
 function compareVersions(a, b) {
-  const parse = (text) => {
-    const match = text ? /^v?(\d+)\.(\d+)(?:\.(\d+))?/u.exec(text.trim()) : null;
+  const parse = (text2) => {
+    const match = text2 ? /^v?(\d+)\.(\d+)(?:\.(\d+))?/u.exec(text2.trim()) : null;
     return match ? [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)] : null;
   };
   const left = parse(a), right = parse(b);
@@ -346,8 +346,8 @@ function loopbackServerRoot(value) {
   }
   return url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname) && (url.pathname === "/" || url.pathname === "") && !url.username && !url.password && !url.search && !url.hash;
 }
-function normalizeOllamaServerUrl(text) {
-  let value = text.trim().replace(/\/+$/u, "");
+function normalizeOllamaServerUrl(text2) {
+  let value = text2.trim().replace(/\/+$/u, "");
   if (!/^[a-z]+:\/\//iu.test(value)) value = `http://${value}`;
   try {
     const url = new URL(value);
@@ -355,7 +355,7 @@ function normalizeOllamaServerUrl(text) {
     if (url.protocol === "http:" && !url.port && ["127.0.0.1", "[::1]"].includes(url.hostname)) url.port = "11434";
     return url.toString().replace(/\/$/u, "");
   } catch {
-    return text.trim();
+    return text2.trim();
   }
 }
 function apiBaseUrlProblem(value) {
@@ -657,16 +657,16 @@ async function ensureHome(path) {
 async function seedClaudeHome(home, trustedFolders) {
   const path = join(home, ".claude.json");
   let current = {};
-  let text = null;
+  let text2 = null;
   try {
-    text = await readFile(path, "utf8");
+    text2 = await readFile(path, "utf8");
   } catch (error) {
     if (error.code !== "ENOENT") throw new Error("The account's Claude Code settings (.claude.json) cannot be read.");
   }
-  if (text !== null) {
+  if (text2 !== null) {
     let parsed;
     try {
-      parsed = JSON.parse(text);
+      parsed = JSON.parse(text2);
     } catch {
       parsed = void 0;
     }
@@ -758,10 +758,10 @@ function ollamaHttp(baseUrl, transport = fetch, timeoutMs = 3e3) {
       await response.body?.cancel().catch(() => void 0);
       return { status: response.status, json: null };
     }
-    const text = await boundedText(response, MAX_BODY);
-    if (text === null) return { status: response.status, json: null };
+    const text2 = await boundedText(response, MAX_BODY);
+    if (text2 === null) return { status: response.status, json: null };
     try {
-      return { status: response.status, json: text ? JSON.parse(text) : null };
+      return { status: response.status, json: text2 ? JSON.parse(text2) : null };
     } catch {
       return { status: response.status, json: null };
     }
@@ -853,8 +853,8 @@ async function preflightOllama(input, transport, timeoutMs = 1500) {
   if (input.shape === "cloud-local") {
     const version = await http("GET", "/api/version");
     if (version.status === 0) throw new Error("Ollama is not running. Open Ollama or run `ollama serve`.");
-    const text = isRecord(version.json) ? shortText(version.json.version, 64) : null;
-    const old2 = ollamaVersionRefusal("cloud-local", input.harness, text);
+    const text2 = isRecord(version.json) ? shortText(version.json.version, 64) : null;
+    const old2 = ollamaVersionRefusal("cloud-local", input.harness, text2);
     if (old2) throw new Error(old2);
     const status = await http("GET", "/api/status");
     const cloud = status.status === 200 && isRecord(status.json) && isRecord(status.json.cloud) ? status.json.cloud : null;
@@ -879,6 +879,19 @@ async function preflightOllama(input, transport, timeoutMs = 1500) {
 // src/routes/routes.ts
 var PLUGIN_ID = "canvastty-accounts";
 var PROBE_CONCURRENCY = 4;
+var iso = (at) => at === null ? null : new Date(at).toISOString();
+var routeQuota = (view) => ({
+  state: view.state,
+  remainingPercent: view.remainingPercent,
+  window: view.window,
+  resetsAt: iso(view.resetsAt),
+  source: view.source,
+  observedAt: iso(view.observedAt),
+  ageMinutes: view.ageMinutes,
+  confidence: view.confidence,
+  launchesSinceRead: view.launchesSinceRead,
+  note: view.note
+});
 var hostOf = (url) => {
   try {
     return new URL(url).host;
@@ -942,6 +955,11 @@ async function listRoutes(accounts, facts, filter = {}) {
         state = "no-effort";
         reason = `${HARNESS_LABELS[harness]} has no reasoning effort "${effort}"`;
       }
+      const quota = state === "decisions-only" ? null : facts.quota?.(account) ?? null;
+      if (state === "ready" && quota?.state === "exhausted") {
+        state = "quota-exhausted";
+        reason = `its quota is used up (${quota.note})`;
+      }
       rows.push({
         provider: harness,
         agent: HARNESS_LABELS[harness],
@@ -952,7 +970,8 @@ async function listRoutes(accounts, facts, filter = {}) {
         endpoint: hostOf(account.baseUrl),
         state,
         ...reason !== void 0 ? { reason } : {},
-        ...state === "ready" ? { launchOptions: launchOptionsFor(account.id, effort) } : {}
+        ...state === "ready" ? { launchOptions: launchOptionsFor(account.id, effort) } : {},
+        ...quota ? { quota: routeQuota(quota) } : {}
       });
     }
   });
@@ -973,6 +992,614 @@ async function pickAccount(accounts, facts, request) {
   const why = `${agent} on ${chosen.account} (${chosen.model}, ${chosen.kind === "ollama" ? "Ollama on this computer" : chosen.endpoint}): the first ready account in the person's order` + (skipped.length ? `; skipped ${skipped.join("; ")}` : "") + ".";
   return { accountId: chosen.accountId, account: chosen.account, model: chosen.model, launchOptions: chosen.launchOptions, why };
 }
+
+// src/quota/reader.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { mkdir as mkdir2, rename as rename2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { join as join2 } from "node:path";
+
+// src/quota/model.ts
+var STALE_MS = 30 * 6e4;
+var EXACT_MS = 10 * 6e4;
+var RESET_TOLERANCE_MS = 2 * 6e4;
+var LOW_PERCENT = 10;
+var ERROR_GRACE_MS = 2 * 6e4;
+var MAX_EVENTS = 12;
+var MAX_WINDOWS = 8;
+var emptyRecord = () => ({
+  observedAt: null,
+  source: null,
+  windows: [],
+  plan: null,
+  exhaustedUntil: null,
+  exhaustedOpen: false,
+  exhaustedAt: null,
+  exhaustedByError: false,
+  lastAttemptAt: null,
+  failures: 0,
+  lastError: null,
+  launchesSinceRead: 0,
+  lastUseAt: null,
+  events: []
+});
+var pushEvent = (record, event) => {
+  record.events.push(event);
+  if (record.events.length > MAX_EVENTS) record.events.splice(0, record.events.length - MAX_EVENTS);
+};
+var time = (at) => new Date(at).toISOString().slice(0, 16).replace("T", " ") + " UTC";
+function earlyReset(previous, next, now) {
+  if (previous.resetsAt === null || previous.usedPercent === null || next.usedPercent === null) return false;
+  if (now >= previous.resetsAt - RESET_TOLERANCE_MS) return false;
+  const drop = previous.usedPercent - next.usedPercent;
+  if (drop < Math.max(10, previous.usedPercent / 2)) return false;
+  const moved = next.resetsAt === null || Math.abs(next.resetsAt - previous.resetsAt) > RESET_TOLERANCE_MS;
+  return moved || next.usedPercent <= 1;
+}
+var modelWindows = (windows) => windows.filter((window) => window.models && window.usedPercent !== null);
+function observe(current, observation, now) {
+  const record = structuredClone(current);
+  const events = [];
+  const add = (kind, note) => {
+    const event = { at: now, kind, note };
+    events.push(event);
+    pushEvent(record, event);
+  };
+  const wasExhausted = record.exhaustedOpen || record.exhaustedUntil !== null;
+  const predicted = record.exhaustedUntil;
+  if (observation.exhausted) {
+    const until = observation.exhausted.until !== null && observation.exhausted.until > now ? observation.exhausted.until : null;
+    record.exhaustedUntil = until;
+    record.exhaustedOpen = until === null;
+    record.exhaustedAt = now;
+    record.exhaustedByError = true;
+    if (!wasExhausted) add("exhausted", `limit error ${observation.exhausted.code}${until ? `, resets ${time(until)}${observation.exhausted.zoneGuessed ? " (time zone assumed)" : ""}` : ", no reset time given"}`);
+    record.source = record.source ?? observation.source;
+    return { record, events };
+  }
+  const windows = observation.windows.slice(0, MAX_WINDOWS);
+  const previous = new Map(record.windows.map((window) => [window.id, window]));
+  let early = null;
+  for (const window of windows) {
+    const before = previous.get(window.id);
+    if (before && window.models && earlyReset(before, window, now)) early = `${window.label}: ${Math.round(before.usedPercent)}% \u2192 ${Math.round(window.usedPercent)}% before ${time(before.resetsAt)}`;
+  }
+  const full = modelWindows(windows).filter((window) => window.usedPercent >= 100);
+  record.observedAt = observation.at;
+  record.source = observation.source;
+  record.windows = windows;
+  record.plan = observation.plan ?? record.plan;
+  record.lastError = null;
+  record.failures = 0;
+  record.launchesSinceRead = 0;
+  if (full.length) {
+    const resets = full.map((window) => window.resetsAt).filter((at) => at !== null && at > now);
+    const until = resets.length === full.length ? Math.max(...resets) : null;
+    record.exhaustedUntil = until;
+    record.exhaustedOpen = until === null;
+    record.exhaustedByError = false;
+    if (!wasExhausted) {
+      record.exhaustedAt = now;
+      add("exhausted", `${full.map((window) => window.label).join(", ")} at 100%${until ? `, resets ${time(until)}` : ""}`);
+    }
+    return { record, events };
+  }
+  if (wasExhausted && record.exhaustedByError && record.exhaustedAt !== null && now - record.exhaustedAt < ERROR_GRACE_MS) return { record, events };
+  if (wasExhausted) {
+    record.exhaustedByError = false;
+    record.exhaustedUntil = null;
+    record.exhaustedOpen = false;
+    record.exhaustedAt = null;
+    if (predicted !== null && now < predicted - RESET_TOLERANCE_MS) add("early-reset", early ?? `room again before the predicted reset ${time(predicted)}`);
+    else add(predicted !== null ? "reset" : "recovered", predicted !== null ? `reset as predicted (${time(predicted)})` : "room again");
+    return { record, events };
+  }
+  if (early) add("early-reset", early);
+  return { record, events };
+}
+function readFailed(current, error, now) {
+  return { ...structuredClone(current), lastAttemptAt: now, failures: current.failures + 1, lastError: error.slice(0, 160) };
+}
+function used(current, now) {
+  return { ...structuredClone(current), lastUseAt: now, launchesSinceRead: Math.min(current.launchesSinceRead + 1, 999) };
+}
+function viewOf(record, now) {
+  const age = record.observedAt === null ? null : Math.max(0, Math.round((now - record.observedAt) / 6e4));
+  const base = { source: record.source, observedAt: record.observedAt, ageMinutes: age, launchesSinceRead: record.launchesSinceRead };
+  if (record.exhaustedUntil !== null && record.exhaustedUntil > now) {
+    return { ...base, state: "exhausted", remainingPercent: 0, window: null, resetsAt: record.exhaustedUntil, confidence: "exact", note: `used up; resets ${time(record.exhaustedUntil)}` };
+  }
+  if (record.exhaustedUntil !== null) {
+    return { ...base, state: "presumed-reset", remainingPercent: null, window: null, resetsAt: record.exhaustedUntil, confidence: "estimated", note: "its reset time passed: probably reset, read again soon" };
+  }
+  if (record.exhaustedOpen) {
+    if (record.exhaustedAt !== null && now - record.exhaustedAt <= STALE_MS) return { ...base, state: "exhausted", remainingPercent: 0, window: null, resetsAt: null, confidence: "estimated", note: "used up; no reset time given, read again soon" };
+    return { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: "was used up with no reset time; not read since" };
+  }
+  if (record.observedAt === null) return { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: record.lastError ? `not readable: ${record.lastError}` : "not read yet" };
+  if (now - record.observedAt > STALE_MS) return { ...base, state: "stale", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: `read ${age} min ago; counts as unknown${record.lastError ? ` (last read failed: ${record.lastError})` : ""}` };
+  let tight = null;
+  let presumed = false;
+  for (const window of modelWindows(record.windows)) {
+    if (window.resetsAt !== null && window.resetsAt <= now) {
+      presumed = true;
+      continue;
+    }
+    if (!tight || window.usedPercent > tight.usedPercent) tight = window;
+  }
+  const confidence = now - record.observedAt <= EXACT_MS && record.launchesSinceRead === 0 ? "exact" : "estimated";
+  if (!tight) {
+    return presumed ? { ...base, state: "presumed-reset", remainingPercent: null, window: null, resetsAt: null, confidence: "estimated", note: "its windows probably reset since the last read" } : { ...base, state: "unknown", remainingPercent: null, window: null, resetsAt: null, confidence: "none", note: "the provider gave no model windows" };
+  }
+  const remaining = Math.max(0, Math.round((100 - tight.usedPercent) * 10) / 10);
+  const view = { ...base, remainingPercent: remaining, window: tight.label, resetsAt: tight.resetsAt, confidence };
+  if (remaining <= 0) return { ...view, state: "exhausted", note: `${tight.label} used up${tight.resetsAt ? `; resets ${time(tight.resetsAt)}` : ""}` };
+  const note = `${tight.label}: ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ""}${record.launchesSinceRead ? `; ${record.launchesSinceRead} launch(es) since the read` : ""}`;
+  if (presumed) return { ...view, state: "presumed-reset", note: `${note}; another window probably reset since the read` };
+  return { ...view, state: remaining < LOW_PERCENT ? "low" : "ok", note };
+}
+var SCHEDULE = Object.freeze({
+  minMs: 3e4,
+  activeMs: 5 * 6e4,
+  idleMs: 30 * 6e4,
+  dormantMs: 60 * 6e4,
+  exhaustedMs: 3 * 6e4,
+  presumedMs: 3e4,
+  /** Read again this long after a predicted reset. */
+  afterResetMs: 2e4,
+  /** A reset this close is waited for exactly instead of the regular interval. */
+  nearResetMs: 15 * 6e4,
+  failureBaseMs: 2 * 6e4,
+  failureMaxMs: 60 * 6e4,
+  /** "Active": a launch in the last half hour; "dormant": none in six hours (or never). */
+  activeWindowMs: 30 * 6e4,
+  dormantAfterMs: 6 * 36e5,
+  jitter: 0.15
+});
+function nextReadAt({ record, now, random }) {
+  const last = Math.max(record.observedAt ?? 0, record.lastAttemptAt ?? 0);
+  const jitter = (ms) => Math.round(ms * (1 + SCHEDULE.jitter * (random * 2 - 1)));
+  if (record.failures > 0) return last + jitter(Math.min(SCHEDULE.failureMaxMs, SCHEDULE.failureBaseMs * 2 ** Math.min(record.failures - 1, 10)));
+  if (record.observedAt === null) return now;
+  const view = viewOf(record, now);
+  let delay;
+  if (view.state === "presumed-reset") delay = SCHEDULE.presumedMs;
+  else if (view.state === "exhausted") delay = SCHEDULE.exhaustedMs;
+  else if (record.lastUseAt !== null && now - record.lastUseAt <= SCHEDULE.activeWindowMs) delay = SCHEDULE.activeMs;
+  else if (record.lastUseAt === null || now - record.lastUseAt > SCHEDULE.dormantAfterMs) delay = SCHEDULE.dormantMs;
+  else delay = SCHEDULE.idleMs;
+  let at = last + jitter(delay);
+  const resets = [record.exhaustedUntil, ...record.windows.filter((window) => window.models).map((window) => window.resetsAt)].filter((reset) => reset !== null && reset > now && reset - now <= SCHEDULE.nearResetMs);
+  if (resets.length) at = Math.min(at, Math.min(...resets) + SCHEDULE.afterResetMs + Math.round(random * 1e4));
+  return Math.max(at, last + SCHEDULE.minMs);
+}
+var num = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+var text = (value, max) => typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
+var SOURCES = ["zai-quota-api", "zai-limit-error", "host-activity"];
+function loadRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value;
+  const record = emptyRecord();
+  record.observedAt = num(raw.observedAt);
+  record.source = SOURCES.find((source) => source === raw.source) ?? null;
+  record.plan = text(raw.plan, 60);
+  record.exhaustedUntil = num(raw.exhaustedUntil);
+  record.exhaustedOpen = raw.exhaustedOpen === true;
+  record.exhaustedAt = num(raw.exhaustedAt);
+  record.exhaustedByError = raw.exhaustedByError === true;
+  record.lastAttemptAt = num(raw.lastAttemptAt);
+  record.failures = Math.max(0, Math.min(num(raw.failures) ?? 0, 50));
+  record.lastError = text(raw.lastError, 160);
+  record.launchesSinceRead = Math.max(0, Math.min(num(raw.launchesSinceRead) ?? 0, 999));
+  record.lastUseAt = num(raw.lastUseAt);
+  if (Array.isArray(raw.windows)) for (const entry of raw.windows.slice(0, MAX_WINDOWS)) {
+    if (!entry || typeof entry !== "object") continue;
+    const w = entry;
+    const id = text(w.id, 60);
+    const label = text(w.label, 40);
+    if (!id || !label) continue;
+    record.windows.push({ id, label, usedPercent: num(w.usedPercent), used: num(w.used), limit: num(w.limit), windowMinutes: num(w.windowMinutes), resetsAt: num(w.resetsAt), models: w.models !== false });
+  }
+  if (Array.isArray(raw.events)) for (const entry of raw.events.slice(-MAX_EVENTS)) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry;
+    const at = num(e.at);
+    const note = text(e.note, 200);
+    const kind = ["exhausted", "early-reset", "reset", "recovered"].find((k) => k === e.kind);
+    if (at !== null && note !== null && kind) record.events.push({ at, kind, note });
+  }
+  return record;
+}
+
+// src/quota/zai.ts
+var ZAI_QUOTA_HOSTS = Object.freeze(["api.z.ai", "open.bigmodel.cn"]);
+var ZAI_QUOTA_PATH = "/api/monitor/usage/quota/limit";
+var MULTIPLIER = { 1: 1440, 3: 60, 5: 1, 6: 10080 };
+var UNIT_NAME = { 1: "d", 3: "h", 5: "min", 6: "w" };
+var isRecord2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+var int = (value) => typeof value === "number" && Number.isInteger(value) ? value : null;
+var finite = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+var clamp = (value) => Math.max(0, Math.min(100, Math.round(value * 10) / 10));
+var ZaiQuotaError = class extends Error {
+  kind;
+  constructor(message, kind = "shape") {
+    super(message);
+    this.kind = kind;
+  }
+};
+function parseZaiQuota(body, now) {
+  if (!isRecord2(body)) throw new ZaiQuotaError("the quota answer is not an object");
+  if (body.success === false || body.code !== void 0 && body.code !== 200 && body.code !== "200" && body.code !== 0) {
+    const code = typeof body.code === "number" || typeof body.code === "string" ? String(body.code).slice(0, 8) : "?";
+    throw new ZaiQuotaError(`the quota endpoint answered code ${code}`, code === "401" || code === "1000" || code === "1001" || code === "1003" ? "auth" : "refused");
+  }
+  const data = isRecord2(body.data) ? body.data : body;
+  if (!Array.isArray(data.limits)) throw new ZaiQuotaError("the quota answer has no limits");
+  const windows = [];
+  for (const raw of data.limits.slice(0, 12)) {
+    if (!isRecord2(raw) || typeof raw.type !== "string") continue;
+    if (!["TOKENS_LIMIT", "CREDIT_LIMIT", "TIME_LIMIT"].includes(raw.type)) continue;
+    const unit = int(raw.unit);
+    const number = int(raw.number);
+    const percentage = finite(raw.percentage);
+    const limit = int(raw.usage);
+    const current = int(raw.currentValue);
+    const remaining = int(raw.remaining);
+    let used2 = null;
+    if (limit !== null && limit > 0) {
+      if (remaining !== null) used2 = Math.max(limit - remaining, current ?? limit - remaining);
+      else if (current !== null) used2 = current;
+    }
+    const usedPercent = used2 !== null && limit ? clamp(Math.min(limit, Math.max(0, used2)) / limit * 100) : percentage !== null ? clamp(percentage) : null;
+    if (usedPercent === null) continue;
+    const tools = raw.type === "TIME_LIMIT";
+    const minutes = tools && unit === 5 && number === 1 ? 30 * 1440 : unit !== null && number !== null && number > 0 && MULTIPLIER[unit] ? number * MULTIPLIER[unit] : null;
+    let resetsAt = int(raw.nextResetTime);
+    if (resetsAt !== null && (resetsAt < now - 864e5 || minutes !== null && resetsAt > now + (minutes + 1) * 6e4)) resetsAt = null;
+    const label = tools ? "MCP month" : minutes === 300 ? "5h" : minutes === 10080 ? "7d" : unit !== null && number !== null && UNIT_NAME[unit] ? `${number}${UNIT_NAME[unit]}` : "window";
+    const id = tools ? "zai:tools" : `zai:${raw.type === "CREDIT_LIMIT" ? "credits" : "tokens"}:${minutes ?? "x"}`;
+    if (windows.some((window) => window.id === id)) continue;
+    windows.push({ id, label, usedPercent, used: used2, limit: limit !== null && limit > 0 ? limit : null, windowMinutes: minutes, resetsAt, models: !tools });
+  }
+  if (!windows.some((window) => window.models)) throw new ZaiQuotaError("the quota answer has no model windows");
+  const plan = [data.planName, data.plan, data.level, data.packageName].find((value) => typeof value === "string" && /^[\w .+-]{1,40}$/u.test(value));
+  return { source: "zai-quota-api", at: now, windows, plan: plan ?? null };
+}
+var EXHAUSTED = /* @__PURE__ */ new Set(["1308", "1310", "1316", "1317", "1318", "1319", "1320", "1321"]);
+var BLOCKED = /* @__PURE__ */ new Set(["1309", "1313", "1314"]);
+function parseFlushTime(text2, now, windowMinutes) {
+  const match = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?/u.exec(text2);
+  if (match) {
+    const [, y, mo, d, h, mi, s, zone] = match;
+    const utc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s ?? 0));
+    if (!Number.isFinite(utc)) return null;
+    if (zone) {
+      const offset = zone === "Z" ? 0 : (zone.startsWith("-") ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(-2))) * 6e4;
+      return { at: utc - offset, zoneGuessed: false };
+    }
+    const latest = now + (windowMinutes + 1) * 6e4;
+    const candidates = [utc, utc - 8 * 36e5].filter((at) => at > now - 6e4 && at <= latest).sort((a, b) => a - b);
+    return candidates.length ? { at: candidates[0], zoneGuessed: true } : null;
+  }
+  const epoch = /\b(1\d{9}|1\d{12})\b/u.exec(text2);
+  if (epoch) {
+    const value = Number(epoch[1]);
+    return { at: value < 1e12 ? value * 1e3 : value, zoneGuessed: false };
+  }
+  return null;
+}
+function parseZaiLimitError(input, now) {
+  let code = null;
+  let message = "";
+  const take = (value) => {
+    if (!isRecord2(value)) return;
+    const inner = isRecord2(value.error) ? value.error : value;
+    if (typeof inner.code === "string" || typeof inner.code === "number") code = String(inner.code);
+    const text2 = inner.message ?? inner.msg;
+    if (typeof text2 === "string") message = text2.slice(0, 600);
+  };
+  if (typeof input === "string") {
+    const trimmed = input.slice(0, 4e3);
+    try {
+      take(JSON.parse(trimmed));
+    } catch {
+    }
+    if (!code) {
+      const found = /["'\s(:]?(13(?:0[89]|1[0-9]|2[01]))["'\s),:]/u.exec(` ${trimmed} `);
+      if (found && /usage limit reached|limit exhausted|limit will reset|resets at|package has expired|fair usage/iu.test(trimmed)) code = found[1];
+      message = trimmed;
+    }
+  } else take(input);
+  if (!code) return null;
+  const windowMinutes = /\b(?:7 days|week|weekly)\b/iu.test(message) || ["1310", "1317", "1319", "1321"].includes(code) ? 10080 : 300;
+  if (BLOCKED.has(code)) return { code, kind: "blocked", until: null, zoneGuessed: false, windowMinutes };
+  if (!EXHAUSTED.has(code)) return null;
+  const flush = parseFlushTime(message, now, code === "1310" ? 31 * 1440 : windowMinutes);
+  return { code, kind: "exhausted", until: flush?.at ?? null, zoneGuessed: flush?.zoneGuessed ?? false, windowMinutes };
+}
+var limitObservation = (limit, now) => ({ source: "zai-limit-error", at: now, windows: [], exhausted: { until: limit.until, code: limit.code, ...limit.zoneGuessed ? { zoneGuessed: true } : {} } });
+
+// src/quota/reader.ts
+var QUOTA_FILE = "quota.json";
+var TICK_MS = 15e3;
+var REQUEST_MS = 1e4;
+var MAX_BODY2 = 256 * 1024;
+var MAX_CONCURRENT = 2;
+var MAX_READS_PER_HOUR = 40;
+var DEMAND_REFRESH_MS = 10 * 6e4;
+var WRITE_DELAY_MS = 500;
+var hostOf2 = (url) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.host.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+};
+function quotaUrlOf(account) {
+  if (!accountKeyed(account) || decisionsOnlyAccount(account)) return null;
+  const host = hostOf2(account.baseUrl);
+  return host && ZAI_QUOTA_HOSTS.includes(host) ? `https://${host}${ZAI_QUOTA_PATH}` : null;
+}
+var untracked = (id) => `untracked:${id}`;
+var offline = async () => {
+  throw new Error("quota reading has no network here");
+};
+var networkFetch = (url, init) => fetch(url, init);
+var QuotaReader = class {
+  options;
+  now;
+  random;
+  fetcher;
+  file;
+  records = /* @__PURE__ */ new Map();
+  /** Which address each record was read for: a changed address starts over. */
+  urls = /* @__PURE__ */ new Map();
+  due = /* @__PURE__ */ new Map();
+  inFlight = /* @__PURE__ */ new Map();
+  reads = /* @__PURE__ */ new Map();
+  timer = null;
+  writeTimer = null;
+  writing = Promise.resolve();
+  constructor(options) {
+    this.options = options;
+    this.now = options.now ?? Date.now;
+    this.random = options.random ?? Math.random;
+    this.fetcher = options.fetch ?? offline;
+    this.file = join2(options.dataDir, QUOTA_FILE);
+    try {
+      const saved = JSON.parse(readFileSync(this.file, "utf8"));
+      if (saved.version === 1 && saved.accounts && typeof saved.accounts === "object") {
+        for (const [id, value] of Object.entries(saved.accounts).slice(0, 64)) {
+          const record = loadRecord(value);
+          const url = saved.urls && typeof saved.urls === "object" ? saved.urls[id] : null;
+          if (record && /^[a-z0-9][a-z0-9-]{0,39}$/u.test(id)) {
+            this.records.set(id, record);
+            if (typeof url === "string" && url.length < 200) this.urls.set(id, url);
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  /** Reads on its own schedule from now on (the service calls this once; tests drive tick()). */
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      void this.tick();
+    }, TICK_MS);
+    this.timer.unref?.();
+  }
+  async stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    await Promise.allSettled([...this.inFlight.values()]);
+    await this.flush();
+  }
+  /** The accounts this reader can read, with their quota URL; records of others are dropped. */
+  readable() {
+    const list = [];
+    for (const account of this.options.accounts()) {
+      const url = quotaUrlOf(account);
+      if (url) list.push({ account, url });
+    }
+    return list;
+  }
+  record(account, url) {
+    if (this.urls.get(account.id) !== url) {
+      this.records.set(account.id, emptyRecord());
+      this.urls.set(account.id, url);
+      this.due.delete(account.id);
+    }
+    return this.records.get(account.id) ?? emptyRecord();
+  }
+  set(id, record) {
+    this.records.set(id, record);
+    this.due.set(id, nextReadAt({ record, now: this.now(), random: this.random() }));
+    this.save();
+  }
+  /** The quota of an account as routes show it; null when this plugin has no way to know it. */
+  view(account) {
+    const url = quotaUrlOf(account);
+    const record = this.urls.get(account.id) === (url ?? untracked(account.id)) ? this.records.get(account.id) : void 0;
+    if (!record) return url ? viewOf(emptyRecord(), this.now()) : null;
+    return viewOf(record, this.now());
+  }
+  events(accountId) {
+    return [...this.records.get(accountId)?.events ?? []];
+  }
+  /** A launch was prepared on the account: counted until the next read, and it is read more often while used. */
+  used(account) {
+    const url = quotaUrlOf(account);
+    if (!url) return;
+    this.set(account.id, used(this.record(account, url), this.now()));
+  }
+  /** A limit seen elsewhere (CanvasTTY's activity, an error body): exhausted now. */
+  noteLimit(account, observation) {
+    const url = quotaUrlOf(account) ?? untracked(account.id);
+    this.apply(account.id, observe(this.record(account, url), observation, this.now()));
+  }
+  /** A limit error text or body for an account (Z.AI codes); true when it was one. */
+  noteError(account, body) {
+    const now = this.now();
+    const limit = parseZaiLimitError(body, now);
+    if (!limit) return false;
+    this.noteLimit(account, limitObservation(limit, now));
+    return true;
+  }
+  /** Forget an account (removed, or its address or key changed). */
+  forget(accountId) {
+    this.records.delete(accountId);
+    this.urls.delete(accountId);
+    this.due.delete(accountId);
+    this.reads.delete(accountId);
+    this.save();
+  }
+  apply(id, result) {
+    this.set(id, result.record);
+    for (const event of result.events) {
+      this.options.log(event.kind === "exhausted" ? "warn" : "info", `quota ${id}: ${event.kind === "early-reset" ? "early reset" : event.kind} (${event.note})`);
+      this.options.onEvent?.(id, event);
+    }
+  }
+  /** Accounts asked about now: read the ones whose data is old (in the background, bounded). */
+  demand(accounts) {
+    const now = this.now();
+    for (const account of accounts) {
+      const url = quotaUrlOf(account);
+      if (!url) continue;
+      const record = this.record(account, url);
+      const last = Math.max(record.observedAt ?? 0, record.lastAttemptAt ?? 0);
+      if (now - last > DEMAND_REFRESH_MS && record.failures === 0) this.due.set(account.id, now);
+    }
+    void this.tick();
+  }
+  /** Reads every account that is due (the timer calls it; tests call it directly). */
+  async tick() {
+    const now = this.now();
+    const list = this.readable();
+    const addresses = new Map(this.options.accounts().map((account) => [account.id, quotaUrlOf(account) ?? untracked(account.id)]));
+    let dropped = false;
+    for (const id of [...this.records.keys()]) if (addresses.get(id) !== this.urls.get(id)) {
+      this.records.delete(id);
+      this.urls.delete(id);
+      this.due.delete(id);
+      dropped = true;
+    }
+    if (dropped) this.save();
+    const waiting = [];
+    for (const { account, url } of list) {
+      if (this.inFlight.size >= MAX_CONCURRENT) break;
+      if (this.inFlight.has(account.id)) continue;
+      const record = this.record(account, url);
+      const at = this.due.get(account.id) ?? nextReadAt({ record, now, random: this.random() });
+      if (!this.due.has(account.id)) this.due.set(account.id, at);
+      if (at > now) continue;
+      waiting.push(this.read(account, url));
+    }
+    await Promise.allSettled(waiting);
+  }
+  /** One bounded read of one account, now (unless it was read too recently). */
+  read(account, url) {
+    const running = this.inFlight.get(account.id);
+    if (running) return running;
+    const now = this.now();
+    const record = this.record(account, url);
+    const last = Math.max(record.observedAt ?? 0, record.lastAttemptAt ?? 0);
+    const hour = (this.reads.get(account.id) ?? []).filter((at) => now - at < 36e5);
+    if (now - last < SCHEDULE.minMs || hour.length >= MAX_READS_PER_HOUR) {
+      this.due.set(account.id, Math.max(last + SCHEDULE.minMs, hour.length >= MAX_READS_PER_HOUR ? hour[0] + 36e5 : 0));
+      return Promise.resolve();
+    }
+    this.reads.set(account.id, [...hour, now]);
+    const run = this.request(account, url).finally(() => this.inFlight.delete(account.id));
+    this.inFlight.set(account.id, run);
+    return run;
+  }
+  async request(account, url) {
+    const started2 = this.now();
+    let key = null;
+    try {
+      key = await this.options.key(account);
+    } catch {
+      key = null;
+    }
+    if (!key) {
+      this.set(account.id, readFailed(this.record(account, url), "no key saved for this address", started2));
+      return;
+    }
+    const scrub = (text2) => key ? text2.split(key).join("[key]") : text2;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_MS);
+    timer.unref?.();
+    try {
+      if (new URL(url).host !== hostOf2(account.baseUrl)) throw new ZaiQuotaError("the quota address is not the account's host");
+      const response = await this.fetcher(url, { method: "GET", headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, signal: controller.signal, redirect: "error" });
+      const body = (await response.text()).slice(0, MAX_BODY2);
+      const now = this.now();
+      if (response.status === 401 || response.status === 403) throw new ZaiQuotaError(`the provider refused the key (${response.status})`, "auth");
+      if (response.status === 429 || response.status >= 400) {
+        const limit2 = parseZaiLimitError(body, now);
+        if (limit2) {
+          this.apply(account.id, observe(this.record(account, url), limitObservation(limit2, now), now));
+          return;
+        }
+        throw new ZaiQuotaError(`the quota endpoint answered HTTP ${response.status}`, "refused");
+      }
+      let json;
+      try {
+        json = JSON.parse(body);
+      } catch {
+        throw new ZaiQuotaError("the quota answer is not JSON");
+      }
+      const limit = parseZaiLimitError(json, now);
+      if (limit && limit.kind === "exhausted") {
+        this.apply(account.id, observe(this.record(account, url), limitObservation(limit, now), now));
+        return;
+      }
+      const observation = parseZaiQuota(json, now);
+      const result = observe(this.record(account, url), observation, now);
+      result.record.lastAttemptAt = now;
+      this.apply(account.id, result);
+    } catch (error) {
+      const text2 = error instanceof ZaiQuotaError ? error.message : controller.signal.aborted ? "the quota endpoint did not answer in time" : "the quota endpoint could not be reached";
+      this.set(account.id, readFailed(this.record(account, url), scrub(text2), this.now()));
+      this.options.log("warn", `quota ${account.id}: ${scrub(text2)}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  // ---- the state file ----
+  save() {
+    this.writeTimer ??= setTimeout(() => {
+      this.writeTimer = null;
+      void this.flush();
+    }, WRITE_DELAY_MS);
+    this.writeTimer.unref?.();
+  }
+  flush() {
+    if (this.writeTimer) {
+      clearTimeout(this.writeTimer);
+      this.writeTimer = null;
+    }
+    const json = JSON.stringify({ version: 1, accounts: Object.fromEntries(this.records), urls: Object.fromEntries(this.urls) });
+    this.writing = this.writing.then(async () => {
+      const temporary = join2(this.options.dataDir, `.${QUOTA_FILE}.${randomUUID2()}.tmp`);
+      try {
+        await mkdir2(this.options.dataDir, { recursive: true, mode: 448 });
+        await writeFile2(temporary, json, { mode: 384, flag: "wx" });
+        await rename2(temporary, this.file);
+      } catch {
+        this.options.log("warn", "quota: the quota state could not be saved");
+      } finally {
+        await rm2(temporary, { force: true }).catch(() => void 0);
+      }
+    });
+    return this.writing;
+  }
+};
 
 // src/service/accounts.ts
 var STORAGE_KEY = "accounts";
@@ -1002,6 +1629,8 @@ var AccountsService = class {
   loading = null;
   /** Saves and key bindings run one at a time, each against what the one before it persisted. */
   writes = Promise.resolve();
+  /** Each account's quota, read from its provider on the reader's own schedule (quota/reader.ts). */
+  quota;
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
   constructor(options) {
     this.host = options.host;
@@ -1011,6 +1640,18 @@ var AccountsService = class {
     this.keyOrigins = {};
     this.unread = options.unread === true;
     if (!this.unread) this.apply(options.saved);
+    this.quota = new QuotaReader({
+      dataDir: options.dataDir,
+      // Nothing is read while the saved accounts are unknown.
+      accounts: () => this.unread ? [] : this.settings.accounts,
+      // Only a key saved for the account's current address is ever sent, and only to that address.
+      key: async (account) => this.keyOrigins[account.id] === originOf(account.baseUrl) ? this.readKey(account) : null,
+      log: (level, message) => this.host.log(level, message),
+      onEvent: (accountId, event) => this.host.emit("quota", { accountId, kind: event.kind, at: event.at, note: event.note }),
+      ...options.quotaFetch ? { fetch: options.quotaFetch } : {},
+      ...options.now ? { now: options.now } : {},
+      ...options.random ? { random: options.random } : {}
+    });
   }
   apply(value) {
     const saved = value && typeof value === "object" ? value : {};
@@ -1075,7 +1716,12 @@ var AccountsService = class {
     settings.accounts.forEach((account, i) => {
       keys[account.id] = states[i];
     });
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS };
+    const quota = {};
+    for (const account of settings.accounts) {
+      const view = this.quota.view(account);
+      if (view) quota[account.id] = { ...routeQuota(view), readable: quotaUrlOf(account) !== null, events: this.quota.events(account.id).slice(-5) };
+    }
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota };
   }
   async save(value) {
     const next = validateSettings(value);
@@ -1098,6 +1744,7 @@ var AccountsService = class {
       this.settings = next;
       this.keyOrigins = keyOrigins;
       for (const id of [...removed, ...changed]) this.forgetCheck(id);
+      for (const id of removed) this.quota.forget(id);
       for (const id of removed) await removeHomes(this.dataDir, id).catch(() => void 0);
       return { saved: true };
     });
@@ -1113,6 +1760,7 @@ var AccountsService = class {
       this.forgetCheck(account.id);
       await this.persist({ settings: this.settings, keyOrigins });
       this.keyOrigins = keyOrigins;
+      this.quota.forget(account.id);
       return null;
     });
   }
@@ -1150,6 +1798,15 @@ var AccountsService = class {
     }
     if ((this.checkEpochs.get(account.id) ?? 0) === epoch && this.find(account.id)) this.checks.set(account.id, result);
     return result;
+  }
+  /** «Прочитать сейчас»: one read of the account's quota (bounded like every read: not twice within 30 s). */
+  async readQuota(accountId) {
+    const account = this.find(accountId);
+    if (!account) throw new Error("No such account.");
+    const url = quotaUrlOf(account);
+    if (!url) return { read: false };
+    await this.quota.read(account, url);
+    return { read: true };
   }
   // ---- CanvasTTY: the launcher list and the launch ----
   /** `canvastty.launch.options`: the accounts the person allowed for this agent. */
@@ -1257,6 +1914,7 @@ var AccountsService = class {
     }
     contribution.args.push(...effortArgs);
     if (thirdPartyModel(harness, account.baseUrl)) contribution.thirdPartyModel = true;
+    this.quota.used(account);
     return contribution;
   }
   // ---- orchestrator tools ----
@@ -1264,6 +1922,7 @@ var AccountsService = class {
     const detections = /* @__PURE__ */ new Map();
     return {
       key: (account) => this.keyState(account).catch(() => "missing"),
+      quota: (account) => this.quota.view(account),
       ollama: (baseUrl) => {
         if (!detections.has(baseUrl)) detections.set(baseUrl, detectOllama(baseUrl, this.transport, 1500));
         return detections.get(baseUrl);
@@ -1271,10 +1930,11 @@ var AccountsService = class {
     };
   }
   async tool(name, input) {
-    const text = (value, max) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : void 0;
-    const provider = text(input.provider, 32);
-    const model = text(input.model, 100);
-    const effort = text(input.effort, 20);
+    const text2 = (value, max) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : void 0;
+    const provider = text2(input.provider, 32);
+    const model = text2(input.model, 100);
+    const effort = text2(input.effort, 20);
+    if (name === "list_routes" || name === "pick_account") this.quota.demand(this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)));
     if (name === "list_routes") {
       let routes;
       try {
@@ -1311,12 +1971,21 @@ var service = async () => {
   await accounts.load();
   return accounts;
 };
+var started = null;
 serve({
+  // The quota state is written before the process ends (CanvasTTY waits about 2 s after shutdown).
+  exit: (code) => {
+    const done = () => process.exit(code);
+    setTimeout(done, 500).unref();
+    void Promise.allSettled([started?.quota.stop()]).finally(done);
+  },
   onInitialize: async (params, host) => {
     const dataDir = typeof params.dataDir === "string" ? params.dataDir : process.cwd();
     const read = await host.callHost("storage.get", { key: "accounts" }).then((value) => ({ value }), () => null);
     if (!read) host.log("warn", "The saved accounts could not be read; reading them again on the next request.");
-    resolveReady(new AccountsService({ host, dataDir, ...read ? { saved: read.value } : { unread: true } }));
+    started = new AccountsService({ host, dataDir, quotaFetch: networkFetch, ...read ? { saved: read.value } : { unread: true } });
+    started.quota.start();
+    resolveReady(started);
   },
   methods: {
     // Host-only requests.
@@ -1327,6 +1996,7 @@ serve({
     state: async () => (await service()).state(),
     save: async (params) => (await service()).save(params.settings),
     check: async (params) => (await service()).check(params.accountId),
-    keyChanged: async (params) => (await service()).keyChanged(params.accountId)
+    keyChanged: async (params) => (await service()).keyChanged(params.accountId),
+    quotaRead: async (params) => (await service()).readQuota(params.accountId)
   }
 });

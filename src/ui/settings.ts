@@ -18,6 +18,12 @@ interface State {
   settings: AccountsSettings;
   keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>;
   checks: Record<string, CheckResult | { error: string }>;
+  quota?: Record<string, QuotaLine>;
+}
+interface QuotaLine {
+  state: 'ok' | 'low' | 'exhausted' | 'presumed-reset' | 'unknown' | 'stale';
+  remainingPercent: number | null; window: string | null; resetsAt: string | null; ageMinutes: number | null;
+  confidence: 'exact' | 'estimated' | 'none'; readable: boolean; events: Array<{ at: number; kind: string; note: string }>;
 }
 
 const host = (window as unknown as { CanvasTTYPlugin: PluginHost }).CanvasTTYPlugin;
@@ -38,7 +44,14 @@ const STRINGS = {
     modelOk: 'The model is installed and can call tools.', modelMissing: 'The model is not installed here; pull it yourself or choose one below.',
     modelNoTools: 'The model cannot call tools, so it cannot drive an agent.', use: 'Use', tools: 'tools', cloud: 'cloud',
     keyCheckOk: 'The key looks right (format only; nothing was sent to the provider).',
-    keyCheckFail: (problem: string) => `Key: ${problem}`
+    keyCheckFail: (problem: string) => `Key: ${problem}`,
+    quota: 'Quota', readNow: 'Read now',
+    quotaState: { ok: 'room left', low: 'running low', exhausted: 'used up', 'presumed-reset': 'probably reset (reading again)', unknown: 'unknown', stale: 'unknown (old read)' } as Record<string, string>,
+    left: (percent: number, window: string | null) => `${percent}% left${window ? ` (${window})` : ''}`,
+    resets: (time: string) => `resets ${time}`,
+    age: (minutes: number | null) => minutes === null ? 'not read yet' : minutes < 1 ? 'read just now' : `read ${minutes} min ago`,
+    passive: 'Only limit messages are seen for this provider; its quota is not read.',
+    earlyReset: 'early reset'
   },
   ru: {
     title: 'Учётные записи моделей',
@@ -54,7 +67,14 @@ const STRINGS = {
     modelOk: 'Модель установлена и умеет вызывать инструменты.', modelMissing: 'Модель здесь не установлена; скачайте её сами или выберите ниже.',
     modelNoTools: 'Модель не умеет вызывать инструменты и не может вести агента.', use: 'Выбрать', tools: 'инструменты', cloud: 'облако',
     keyCheckOk: 'Ключ выглядит верно (проверен только формат; провайдеру ничего не отправлялось).',
-    keyCheckFail: (problem: string) => `Ключ: ${problem}`
+    keyCheckFail: (problem: string) => `Ключ: ${problem}`,
+    quota: 'Квота', readNow: 'Прочитать сейчас',
+    quotaState: { ok: 'есть запас', low: 'заканчивается', exhausted: 'исчерпана', 'presumed-reset': 'вероятно, сброшена (читаю заново)', unknown: 'неизвестна', stale: 'неизвестна (давнее чтение)' } as Record<string, string>,
+    left: (percent: number, window: string | null) => `осталось ${percent}%${window ? ` (${window})` : ''}`,
+    resets: (time: string) => `сброс ${time}`,
+    age: (minutes: number | null) => minutes === null ? 'ещё не прочитана' : minutes < 1 ? 'прочитана только что' : `прочитана ${minutes} мин назад`,
+    passive: 'У этого провайдера видны только сообщения о лимите; квота не читается.',
+    earlyReset: 'досрочный сброс'
   }
 };
 const KEY_PROBLEM: Record<'en' | 'ru', Record<string, string>> = {
@@ -143,6 +163,25 @@ function checkLine(result: CheckResult | { error: string }, account: Account): H
   return box;
 }
 
+/** The account's quota as the service last read it, with its age (an old read is shown as old, never hidden). */
+function quotaRow(account: Account, quota: QuotaLine): HTMLElement {
+  const local = (iso: string): string => new Date(iso).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const parts = [t.quotaState[quota.state] ?? quota.state];
+  if (quota.remainingPercent !== null && quota.state !== 'exhausted') parts.push(t.left(quota.remainingPercent, quota.window));
+  if (quota.resetsAt) parts.push(t.resets(local(quota.resetsAt)));
+  if (quota.readable) parts.push(t.age(quota.ageMinutes));
+  const early = quota.events.filter(event => event.kind === 'early-reset').at(-1);
+  if (early) parts.push(`${t.earlyReset} ${new Date(early.at).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`);
+  const row = el('div', { className: 'row', dataset: { quota: account.id } }, el('span', { className: 'label', textContent: t.quota }),
+    el('span', { className: quota.state === 'exhausted' ? 'warn' : 'muted', textContent: quota.readable ? parts.join(' · ') : `${parts.join(' · ')} — ${t.passive}` }));
+  if (quota.readable) {
+    row.append(button(t.readNow, `quota-read-${account.id}`, () => {
+      host.service.request(SERVICE, 'quotaRead', { accountId: account.id }).then(() => load(), error => say(errorText(error)));
+    }));
+  }
+  return row;
+}
+
 function accountItem(account: Account): HTMLLIElement {
   const preset = PRESETS.find(entry => entry.id === account.preset)!;
   const item = el('li', { className: 'account', dataset: { account: account.id } });
@@ -199,6 +238,8 @@ function accountItem(account: Account): HTMLLIElement {
         await load();
       })));
   }
+  const quota = state!.quota?.[account.id];
+  if (quota) item.append(quotaRow(account, quota));
   const check = state!.checks[account.id];
   if (check) item.append(checkLine(check, account));
   return item;

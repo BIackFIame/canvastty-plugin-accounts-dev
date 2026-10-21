@@ -8,7 +8,9 @@ import { buildHarnessLaunch, codexTrustArguments, type Contribution } from '../l
 import { effortArguments } from '../launch/effort.ts';
 import { ensureHome, homeFolder, projectRouteProblem, providerIdOf, removeHomes, seedClaudeHome } from '../launch/homes.ts';
 import { detectOllama, preflightOllama, type OllamaDetection, type OllamaFetch, type OllamaPreflight } from '../launch/ollama.ts';
-import { listRoutes, pickAccount, type RouteFacts } from '../routes/routes.ts';
+import { listRoutes, pickAccount, routeQuota, type RouteFacts, type RouteQuota } from '../routes/routes.ts';
+import { QuotaReader, quotaUrlOf, type QuotaFetch } from '../quota/reader.ts';
+import type { QuotaEvent } from '../quota/model.ts';
 
 /**
  * The Accounts service: the launch contributor behind the launcher's "Model account" (and reasoning effort), the
@@ -64,9 +66,11 @@ export class AccountsService {
   private loading: Promise<void> | null = null;
   /** Saves and key bindings run one at a time, each against what the one before it persisted. */
   private writes: Promise<unknown> = Promise.resolve();
+  /** Each account's quota, read from its provider on the reader's own schedule (quota/reader.ts). */
+  readonly quota: QuotaReader;
 
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
-  constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; transport?: OllamaFetch }) {
+  constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
     this.host = options.host;
     this.dataDir = options.dataDir;
     this.transport = options.transport;
@@ -74,6 +78,18 @@ export class AccountsService {
     this.keyOrigins = {};
     this.unread = options.unread === true;
     if (!this.unread) this.apply(options.saved);
+    this.quota = new QuotaReader({
+      dataDir: options.dataDir,
+      // Nothing is read while the saved accounts are unknown.
+      accounts: () => this.unread ? [] : this.settings.accounts,
+      // Only a key saved for the account's current address is ever sent, and only to that address.
+      key: async account => this.keyOrigins[account.id] === originOf(account.baseUrl) ? this.readKey(account) : null,
+      log: (level, message) => this.host.log(level, message),
+      onEvent: (accountId: string, event: QuotaEvent) => this.host.emit('quota', { accountId, kind: event.kind, at: event.at, note: event.note }),
+      ...(options.quotaFetch ? { fetch: options.quotaFetch } : {}),
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.random ? { random: options.random } : {})
+    });
   }
 
   private apply(value: unknown): void {
@@ -128,14 +144,19 @@ export class AccountsService {
 
   // ---- the settings page ----
 
-  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS }> {
+  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }> }> {
     // One secrets read per keyed account, all at once (MAX_ACCOUNTS stays under the transport's host-call cap).
     const { settings } = this;
     const states = await Promise.all(settings.accounts.map(account =>
       accountKeyed(account) ? this.keyState(account).catch(() => 'missing' as const) : Promise.resolve('none' as const)));
     const keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'> = {};
     settings.accounts.forEach((account, i) => { keys[account.id] = states[i]!; });
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS };
+    const quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }> = {};
+    for (const account of settings.accounts) {
+      const view = this.quota.view(account);
+      if (view) quota[account.id] = { ...routeQuota(view), readable: quotaUrlOf(account) !== null, events: this.quota.events(account.id).slice(-5) };
+    }
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota };
   }
 
   async save(value: unknown): Promise<{ saved: true }> {
@@ -161,6 +182,7 @@ export class AccountsService {
       this.settings = next;
       this.keyOrigins = keyOrigins;
       for (const id of [...removed, ...changed]) this.forgetCheck(id);
+      for (const id of removed) this.quota.forget(id);
       for (const id of removed) await removeHomes(this.dataDir, id).catch(() => undefined);
       return { saved: true as const };
     });
@@ -178,6 +200,8 @@ export class AccountsService {
       this.forgetCheck(account.id);
       await this.persist({ settings: this.settings, keyOrigins });
       this.keyOrigins = keyOrigins;
+      // Another key may be another plan: what was read with the old one no longer applies.
+      this.quota.forget(account.id);
       return null;
     });
   }
@@ -215,6 +239,16 @@ export class AccountsService {
     // Kept for the page only if the account is still the one that was checked.
     if ((this.checkEpochs.get(account.id) ?? 0) === epoch && this.find(account.id)) this.checks.set(account.id, result);
     return result;
+  }
+
+  /** «Прочитать сейчас»: one read of the account's quota (bounded like every read: not twice within 30 s). */
+  async readQuota(accountId: unknown): Promise<{ read: boolean }> {
+    const account = this.find(accountId);
+    if (!account) throw new Error('No such account.');
+    const url = quotaUrlOf(account);
+    if (!url) return { read: false };
+    await this.quota.read(account, url);
+    return { read: true };
   }
 
   // ---- CanvasTTY: the launcher list and the launch ----
@@ -323,6 +357,7 @@ export class AccountsService {
     contribution.args.push(...effortArgs);
     // A weak model's own auto classifier is not a safety boundary: CanvasTTY runs "auto" as accept-edits for it.
     if (thirdPartyModel(harness, account.baseUrl)) contribution.thirdPartyModel = true;
+    this.quota.used(account);
     return contribution;
   }
 
@@ -332,6 +367,7 @@ export class AccountsService {
     const detections = new Map<string, Promise<OllamaDetection>>();
     return {
       key: account => this.keyState(account).catch(() => 'missing' as const),
+      quota: account => this.quota.view(account),
       ollama: baseUrl => {
         if (!detections.has(baseUrl)) detections.set(baseUrl, detectOllama(baseUrl, this.transport, 1_500));
         return detections.get(baseUrl)!;
@@ -344,6 +380,8 @@ export class AccountsService {
     const provider = text(input.provider, 32);
     const model = text(input.model, 100);
     const effort = text(input.effort, 20);
+    // Accounts asked about are read again in the background when their quota data is old.
+    if (name === 'list_routes' || name === 'pick_account') this.quota.demand(this.settings.accounts.filter(account => !provider || account.agents.includes(provider as Harness)));
     if (name === 'list_routes') {
       let routes;
       try {

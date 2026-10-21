@@ -17,3 +17,4 @@ input:not([type]), input[type="password"] { padding: 3px 6px; min-width: 160px; 
 .models { margin: 4px 0 0; padding-left: 16px; }
 .models code { font-size: 12px; }
 .status { position: fixed; left: 0; right: 0; bottom: 0; padding: 6px 16px; min-height: 1.4em; background: Canvas; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+.warn { font-weight: 600; }

@@ -10,12 +10,15 @@ import { DECISIONS_ONLY_REASON, HARNESS_LABELS, HARNESSES, accountKeyed, decisio
 import { parseOllamaModelRef } from '../shared/ollamaModelRef.ts';
 import { ollamaVersionRefusal, type OllamaDetection } from '../launch/ollama.ts';
 import { PROVIDER_EFFORTS, isEffort } from '../launch/effort.ts';
+import type { QuotaView } from '../quota/model.ts';
 
 export const PLUGIN_ID = 'canvastty-accounts';
 
 export type RouteState = 'ready' | 'no-key' | 'key-for-other-address' | 'ollama-down' | 'ollama-old' | 'model-missing' | 'no-tools' | 'cloud-off' | 'no-effort'
   /** An OpenRouter account: OpenRouter is for the Assistant's Jev decisions only, never a subagent's model traffic. */
-  | 'decisions-only';
+  | 'decisions-only'
+  /** The provider's quota for the account is used up until `quota.resetsAt` (read from the provider, or its limit error). */
+  | 'quota-exhausted';
 
 /** Accounts probed at once (keys through the host, Ollama servers over loopback). */
 const PROBE_CONCURRENCY = 4;
@@ -33,13 +36,39 @@ export interface RouteRow {
   reason?: string;
   /** Pass as `spawn_agent` `launchOptions` (only when ready). */
   launchOptions?: Record<string, Record<string, string | boolean>>;
+  /** The account's subscription quota, when this plugin can know it (unknown is never "used up"). */
+  quota?: RouteQuota;
 }
+
+/** QuotaView as an orchestrator (and the Assistant's routing) reads it. */
+export interface RouteQuota {
+  state: QuotaView['state'];
+  remainingPercent: number | null;
+  window: string | null;
+  /** ISO time. */
+  resetsAt: string | null;
+  source: string | null;
+  /** ISO time of the read the numbers come from. */
+  observedAt: string | null;
+  ageMinutes: number | null;
+  confidence: QuotaView['confidence'];
+  launchesSinceRead: number;
+  note: string;
+}
+
+const iso = (at: number | null): string | null => at === null ? null : new Date(at).toISOString();
+export const routeQuota = (view: QuotaView): RouteQuota => ({
+  state: view.state, remainingPercent: view.remainingPercent, window: view.window, resetsAt: iso(view.resetsAt), source: view.source,
+  observedAt: iso(view.observedAt), ageMinutes: view.ageMinutes, confidence: view.confidence, launchesSinceRead: view.launchesSinceRead, note: view.note
+});
 
 export interface RouteFacts {
   /** The key's state per keyed account. */
   key(account: Account): Promise<'ok' | 'missing' | 'other-address'>;
   /** One detection per Ollama server address (cached for one call). */
   ollama(baseUrl: string): Promise<OllamaDetection>;
+  /** The account's quota as last read (null: this plugin cannot know it). */
+  quota?(account: Account): QuotaView | null;
 }
 
 const hostOf = (url: string): string => { try { return new URL(url).host; } catch { return url.slice(0, 60); } };
@@ -106,10 +135,15 @@ export async function listRoutes(accounts: readonly Account[], facts: RouteFacts
       if (state === 'ready' && effort !== 'default' && !PROVIDER_EFFORTS[harness]?.includes(effort as never)) {
         state = 'no-effort'; reason = `${HARNESS_LABELS[harness]} has no reasoning effort "${effort}"`;
       }
+      const quota = state === 'decisions-only' ? null : facts.quota?.(account) ?? null;
+      // Used up (fresh, with its reset still ahead): skipped like any account that cannot work now. Unknown, stale or
+      // probably reset accounts stay ready.
+      if (state === 'ready' && quota?.state === 'exhausted') { state = 'quota-exhausted'; reason = `its quota is used up (${quota.note})`; }
       rows.push({
         provider: harness, agent: HARNESS_LABELS[harness], accountId: account.id, account: account.label,
         kind: shape === 'local' ? 'ollama' : shape ? 'ollama-cloud' : 'api-key', model: account.model, endpoint: hostOf(account.baseUrl),
-        state, ...(reason !== undefined ? { reason } : {}), ...(state === 'ready' ? { launchOptions: launchOptionsFor(account.id, effort) } : {})
+        state, ...(reason !== undefined ? { reason } : {}), ...(state === 'ready' ? { launchOptions: launchOptionsFor(account.id, effort) } : {}),
+        ...(quota ? { quota: routeQuota(quota) } : {})
       });
     }
   });

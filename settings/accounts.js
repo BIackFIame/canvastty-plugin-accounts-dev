@@ -93,7 +93,15 @@
       tools: "tools",
       cloud: "cloud",
       keyCheckOk: "The key looks right (format only; nothing was sent to the provider).",
-      keyCheckFail: (problem) => `Key: ${problem}`
+      keyCheckFail: (problem) => `Key: ${problem}`,
+      quota: "Quota",
+      readNow: "Read now",
+      quotaState: { ok: "room left", low: "running low", exhausted: "used up", "presumed-reset": "probably reset (reading again)", unknown: "unknown", stale: "unknown (old read)" },
+      left: (percent, window2) => `${percent}% left${window2 ? ` (${window2})` : ""}`,
+      resets: (time) => `resets ${time}`,
+      age: (minutes) => minutes === null ? "not read yet" : minutes < 1 ? "read just now" : `read ${minutes} min ago`,
+      passive: "Only limit messages are seen for this provider; its quota is not read.",
+      earlyReset: "early reset"
     },
     ru: {
       title: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043C\u043E\u0434\u0435\u043B\u0435\u0439",
@@ -131,7 +139,15 @@
       tools: "\u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u044B",
       cloud: "\u043E\u0431\u043B\u0430\u043A\u043E",
       keyCheckOk: "\u041A\u043B\u044E\u0447 \u0432\u044B\u0433\u043B\u044F\u0434\u0438\u0442 \u0432\u0435\u0440\u043D\u043E (\u043F\u0440\u043E\u0432\u0435\u0440\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0444\u043E\u0440\u043C\u0430\u0442; \u043F\u0440\u043E\u0432\u0430\u0439\u0434\u0435\u0440\u0443 \u043D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u043B\u043E\u0441\u044C).",
-      keyCheckFail: (problem) => `\u041A\u043B\u044E\u0447: ${problem}`
+      keyCheckFail: (problem) => `\u041A\u043B\u044E\u0447: ${problem}`,
+      quota: "\u041A\u0432\u043E\u0442\u0430",
+      readNow: "\u041F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C \u0441\u0435\u0439\u0447\u0430\u0441",
+      quotaState: { ok: "\u0435\u0441\u0442\u044C \u0437\u0430\u043F\u0430\u0441", low: "\u0437\u0430\u043A\u0430\u043D\u0447\u0438\u0432\u0430\u0435\u0442\u0441\u044F", exhausted: "\u0438\u0441\u0447\u0435\u0440\u043F\u0430\u043D\u0430", "presumed-reset": "\u0432\u0435\u0440\u043E\u044F\u0442\u043D\u043E, \u0441\u0431\u0440\u043E\u0448\u0435\u043D\u0430 (\u0447\u0438\u0442\u0430\u044E \u0437\u0430\u043D\u043E\u0432\u043E)", unknown: "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430", stale: "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430 (\u0434\u0430\u0432\u043D\u0435\u0435 \u0447\u0442\u0435\u043D\u0438\u0435)" },
+      left: (percent, window2) => `\u043E\u0441\u0442\u0430\u043B\u043E\u0441\u044C ${percent}%${window2 ? ` (${window2})` : ""}`,
+      resets: (time) => `\u0441\u0431\u0440\u043E\u0441 ${time}`,
+      age: (minutes) => minutes === null ? "\u0435\u0449\u0451 \u043D\u0435 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430" : minutes < 1 ? "\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0442\u043E" : `\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430 ${minutes} \u043C\u0438\u043D \u043D\u0430\u0437\u0430\u0434`,
+      passive: "\u0423 \u044D\u0442\u043E\u0433\u043E \u043F\u0440\u043E\u0432\u0430\u0439\u0434\u0435\u0440\u0430 \u0432\u0438\u0434\u043D\u044B \u0442\u043E\u043B\u044C\u043A\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F \u043E \u043B\u0438\u043C\u0438\u0442\u0435; \u043A\u0432\u043E\u0442\u0430 \u043D\u0435 \u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F.",
+      earlyReset: "\u0434\u043E\u0441\u0440\u043E\u0447\u043D\u044B\u0439 \u0441\u0431\u0440\u043E\u0441"
     }
   };
   var KEY_PROBLEM = {
@@ -223,6 +239,27 @@
     box.append(list);
     return box;
   }
+  function quotaRow(account, quota) {
+    const local = (iso) => new Date(iso).toLocaleString(locale === "ru" ? "ru-RU" : "en-US", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    const parts = [t.quotaState[quota.state] ?? quota.state];
+    if (quota.remainingPercent !== null && quota.state !== "exhausted") parts.push(t.left(quota.remainingPercent, quota.window));
+    if (quota.resetsAt) parts.push(t.resets(local(quota.resetsAt)));
+    if (quota.readable) parts.push(t.age(quota.ageMinutes));
+    const early = quota.events.filter((event) => event.kind === "early-reset").at(-1);
+    if (early) parts.push(`${t.earlyReset} ${new Date(early.at).toLocaleString(locale === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit" })}`);
+    const row = el(
+      "div",
+      { className: "row", dataset: { quota: account.id } },
+      el("span", { className: "label", textContent: t.quota }),
+      el("span", { className: quota.state === "exhausted" ? "warn" : "muted", textContent: quota.readable ? parts.join(" \xB7 ") : `${parts.join(" \xB7 ")} \u2014 ${t.passive}` })
+    );
+    if (quota.readable) {
+      row.append(button(t.readNow, `quota-read-${account.id}`, () => {
+        host.service.request(SERVICE, "quotaRead", { accountId: account.id }).then(() => load(), (error) => say(errorText(error)));
+      }));
+    }
+    return row;
+  }
   function accountItem(account) {
     const preset = PRESETS.find((entry) => entry.id === account.preset);
     const item = el("li", { className: "account", dataset: { account: account.id } });
@@ -299,6 +336,8 @@
         })
       ));
     }
+    const quota = state.quota?.[account.id];
+    if (quota) item.append(quotaRow(account, quota));
     const check = state.checks[account.id];
     if (check) item.append(checkLine(check, account));
     return item;

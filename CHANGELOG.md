@@ -6,6 +6,8 @@ Requires the CanvasTTY core with plugin API v2 and `launch.delegable`: the upcom
 
 ### What you'll notice
 
+- Z.AI / BigModel (GLM Coding Plan) accounts show their quota: the service reads it from the account's own host on its own schedule (no page needs to be open), `list_routes` returns it per route with its age and source, and `pick_account` skips an account whose quota is used up until it resets. A reset that comes early (or a bonus reset) is noticed on the next read, which is due within minutes while an account is used up; an old read is shown as old and counts as unknown, never as used up. The settings page shows each account's quota with a *Read now* button.
+
 - OpenRouter is for the Assistant's Jev decisions only: a subagent on an OpenRouter account (`openrouter.ai` or a subdomain, preset or custom) is refused, and `list_routes` marks such accounts `decisions-only` with no `launchOptions`, so `pick_account` never chooses them. An agent you start yourself on one still runs.
 - OpenCode on an account no longer sends titles or summaries to a provider your global OpenCode config names (such as OpenCode Zen): its config sets `enabled_providers` to the account's provider, and `small_model` and the model of each native agent (title, summary, compaction, general, explore, build, plan) to the account's model, so a global `agent.<name>.model` can neither redirect those calls nor make them fail.
 - No more losing accounts when storage cannot be read at startup: the page and launches refuse with "try again" instead of showing an empty list that the next save would write over your accounts and key bindings.

@@ -34,6 +34,16 @@ subdomain) still runs an agent you start yourself, but a subagent is refused on 
 only that account's provider (`enabled_providers`), and its titles, summaries, compaction and own subagents use the
 account's model (`small_model` and each native agent's `model`), whatever your global OpenCode config names.
 
+Quota. For a Z.AI or BigModel (GLM Coding Plan) account the service reads the plan's quota itself, on its own schedule,
+whether or not a page is open: `GET /api/monitor/usage/quota/limit` on the account's own host (`api.z.ai` or
+`open.bigmodel.cn`), with the account's key, redirects refused. It reads often while the account is used, every few
+minutes while it is used up, just after a predicted reset, and rarely while idle (at most 40 reads an hour; failures
+back off). `list_routes` shows each such account's `quota` (state, percent left, window, reset time, source, read time
+and age, confidence), and `pick_account` skips an account whose quota is used up. A read older than 30 minutes is
+`stale`: unknown, never "used up". A reset time that passed makes it "probably reset" and it is read again; a read that
+shows room before the predicted reset clears the exhaustion at once (an early or bonus reset). The state survives
+restarts (`quota.json` in the plugin's data folder, without keys). Other providers' quotas are not read.
+
 ## What it does to a launch
 
 - Claude Code: `ANTHROPIC_BASE_URL` (Ollama gets its server root), `ANTHROPIC_AUTH_TOKEN` (the key, or `ollama` for a
