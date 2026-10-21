@@ -1,10 +1,14 @@
 // L22 recipes (pure) and the account model: what each agent CLI receives for one account, and which accounts are valid.
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { APPROVAL_CONFIG_KEY, buildHarnessLaunch, codexTrustArguments, MODEL_KEY_ENV, openCodeAnthropicBase } from '../src/launch/harness.ts';
+import { APPROVAL_CONFIG_KEY, buildHarnessLaunch, codexTrustArguments, MODEL_KEY_ENV, OPENCODE_NATIVE_AGENTS, openCodeAnthropicBase } from '../src/launch/harness.ts';
 import { effortArguments } from '../src/launch/effort.ts';
 import {
-  accountKeyed, harnessSupport, loadSettings, newAccountId, normalizeOllamaServerUrl, ollamaWireModel, supportedHarnesses, validateAccount, validateSettings
+  accountKeyed, decisionsOnlyAccount, harnessSupport, isDecisionOnlyHost, loadSettings, newAccountId, normalizeOllamaServerUrl, ollamaWireModel, supportedHarnesses, validateAccount, validateSettings
 } from '../src/shared/accounts.ts';
 import { apiKeyProblem, envSubstitutionProblem } from '../src/shared/apiKeyHygiene.ts';
 
@@ -88,6 +92,107 @@ test('OpenCode: a private OPENCODE_CONFIG (CanvasTTY owns OPENCODE_CONFIG_CONTEN
   assert.equal(local.options.apiKey, undefined);
   assert.equal(local.models['qwen3.5:9b:local'].limit.context, 65536);
   assert.deepEqual(ollama.secretEnv, {});
+});
+
+test('OpenCode sees only the account\'s provider: enabled_providers and small_model on the account\'s own model', () => {
+  for (const shape of [
+    { protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2', secretKey: SECRET },
+    { protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET },
+    { protocol: 'ollama', ollamaShape: 'local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b:local' }
+  ]) {
+    const config = JSON.parse(buildHarnessLaunch({ ...base, harness: 'opencode', ...shape }).files[0].content);
+    assert.deepEqual(config.enabled_providers, ['canvastty_abc'], shape.protocol);
+    assert.deepEqual(Object.keys(config.provider), ['canvastty_abc']);
+    assert.equal(config.model, `canvastty_abc/${shape.model}`);
+    assert.equal(config.small_model, config.model, 'titles and summaries on the account\'s own (only) model');
+    assert.ok(config.provider.canvastty_abc.models[shape.model], 'small_model names a model the provider defines');
+    assert.deepEqual(Object.keys(config.agent), ['build', 'plan', 'general', 'explore', 'title', 'summary', 'compaction']);
+    for (const name of OPENCODE_NATIVE_AGENTS) assert.deepEqual(config.agent[name], { model: config.model }, name);
+  }
+});
+
+/** OpenCode's config merge (global, then OPENCODE_CONFIG): objects merge, later scalars and arrays replace. Checked
+ *  against `opencode debug config` 1.18.33: a global enabled_providers ["opencode","anthropic"] became ["canvastty_…"]. */
+const mergeConfig = (target, source) => {
+  const out = { ...target };
+  for (const [key, value] of Object.entries(source)) {
+    out[key] = value && typeof value === 'object' && !Array.isArray(value) && out[key] && typeof out[key] === 'object' && !Array.isArray(out[key])
+      ? mergeConfig(out[key], value) : value;
+  }
+  return out;
+};
+
+test('a global OpenCode config naming other providers (OpenCode Zen, a collector) does not reach the run', () => {
+  const global = {
+    model: 'opencode/gpt-5-nano', small_model: 'opencode/gpt-5-nano', enabled_providers: ['opencode', 'anthropic'],
+    agent: { title: { model: 'opencode/gpt-5-nano', temperature: 0.2 }, summary: { model: 'anthropic/claude-haiku-4-5' }, compaction: { model: 'collector/m' }, general: { model: 'collector/m' } },
+    provider: { collector: { npm: '@ai-sdk/openai-compatible', options: { baseURL: 'https://collector.test/v1' }, models: { m: {} } } }
+  };
+  const ours = JSON.parse(buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET }).files[0].content);
+  const effective = mergeConfig(global, ours);
+  assert.deepEqual(effective.enabled_providers, ['canvastty_abc'], 'only the account\'s provider is loaded');
+  assert.equal(effective.model, 'canvastty_abc/glm-4.6');
+  assert.equal(effective.small_model, 'canvastty_abc/glm-4.6', 'title and summary calls stay on the account');
+  // The global provider definitions remain in the merged file but are never loaded.
+  for (const id of ['opencode', 'anthropic', 'collector']) assert.ok(!effective.enabled_providers.includes(id), id);
+  for (const name of OPENCODE_NATIVE_AGENTS) assert.equal(effective.agent[name].model, 'canvastty_abc/glm-4.6', `agent ${name}`);
+  assert.equal(effective.agent.title.temperature, 0.2, 'only the model is pinned; the person\'s other agent settings stay');
+  // Without the pins (the earlier config) the global small model was OpenCode Zen's.
+  const { enabled_providers: _e, small_model: _s, ...unpinned } = ours;
+  assert.equal(mergeConfig(global, unpinned).small_model, 'opencode/gpt-5-nano');
+});
+
+// Real OpenCode, only when OPENCODE_BIN names a binary: `opencode models` under a fake HOME whose global config names
+// OpenCode Zen and a collector lists only the account's model. Offline (models fetch off), nothing is sent.
+test('real OpenCode resolves only the account\'s provider (OPENCODE_BIN)', { skip: !process.env.OPENCODE_BIN && 'set OPENCODE_BIN to run' }, async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'canvastty-accounts-oc-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  for (const dir of ['.config/opencode', 'run', 'project', 'tmp']) await mkdir(join(home, dir), { recursive: true });
+  await writeFile(join(home, '.config/opencode/opencode.json'), JSON.stringify({
+    small_model: 'opencode/gpt-5-nano', enabled_providers: ['opencode', 'collector'],
+    agent: { title: { model: 'opencode/gpt-5-nano' }, summary: { model: 'collector/m' }, compaction: { model: 'collector/m' }, explore: { model: 'opencode/gpt-5-nano' } },
+    provider: { collector: { npm: '@ai-sdk/openai-compatible', options: { baseURL: 'https://collector.test/v1' }, models: { m: { name: 'm' } } } }
+  }));
+  const plan = buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET });
+  await writeFile(join(home, 'run/opencode.json'), plan.files[0].content);
+  const env = { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'), XDG_CACHE_HOME: join(home, '.cache'),
+    XDG_STATE_HOME: join(home, '.local/state'), TMPDIR: join(home, 'tmp'), OPENCODE_CONFIG: join(home, 'run/opencode.json'),
+    OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' };
+  // Output goes to a file: OpenCode can exit before a pipe is drained, cutting the last lines.
+  let runs = 0;
+  const run = async (args) => {
+    const out = join(home, 'tmp', `out-${runs++}.txt`);
+    const handle = await open(out, 'w');
+    try {
+      await new Promise((resolve, reject) => {
+        const child = spawn(process.env.OPENCODE_BIN, args, { cwd: join(home, 'project'), env, stdio: ['ignore', handle.fd, 'ignore'] });
+        const timer = setTimeout(() => child.kill(), 40_000);
+        child.on('error', reject);
+        child.on('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`opencode ${args.join(' ')} exited ${code}`)); });
+      });
+    } finally { await handle.close(); }
+    return readFile(out, 'utf8');
+  };
+  assert.deepEqual((await run(['models', '--pure'])).trim().split('\n'), ['canvastty_abc/glm-4.6']);
+  assert.match(await run(['debug', 'config', '--pure']), /"small_model": "canvastty_abc\/glm-4\.6"/);
+  // Every agent this OpenCode has is one the config pins (a new native agent would show up here).
+  const agents = (await run(['agent', 'list', '--pure'])).split('\n').map(line => /^(\S+) \((?:primary|subagent|all)\)$/u.exec(line)?.[1]).filter(Boolean);
+  assert.deepEqual([...agents].sort(), [...OPENCODE_NATIVE_AGENTS].sort());
+  for (const name of OPENCODE_NATIVE_AGENTS) {
+    assert.deepEqual(JSON.parse(await run(['debug', 'agent', name, '--pure'])).model, { providerID: 'canvastty_abc', modelID: 'glm-4.6' }, name);
+  }
+});
+
+test('OpenRouter is for Jev\'s decisions only: the host predicate and the accounts it marks', () => {
+  for (const url of ['https://openrouter.ai/api/v1', 'https://OpenRouter.AI./api', 'https://x.openrouter.ai/v1', 'https://user@openrouter.ai/api', 'not a url']) {
+    assert.equal(isDecisionOnlyHost(url), true, url);
+  }
+  for (const url of ['https://api.z.ai/api/anthropic', 'https://openrouter.ai.evil.test/v1', 'https://notopenrouter.ai/v1', 'https://openrouter.ai@evil.test/v1', 'http://127.0.0.1:11434']) {
+    assert.equal(isDecisionOnlyHost(url), false, url);
+  }
+  assert.equal(decisionsOnlyAccount({ preset: 'openrouter-anthropic', baseUrl: 'https://openrouter.ai/api' }), true);
+  assert.equal(decisionsOnlyAccount({ preset: 'custom-openai', baseUrl: 'https://eu.openrouter.ai/api/v1' }), true, 'a custom address there too');
+  assert.equal(decisionsOnlyAccount({ preset: 'zai-openai', baseUrl: 'https://api.z.ai/api/paas/v4' }), false);
 });
 
 test('Qwen Code and Kimi: OPENAI_* or an openai_legacy alias; Kimi\'s key only in a private run file', () => {

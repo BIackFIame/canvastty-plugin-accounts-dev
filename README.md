@@ -28,6 +28,12 @@ Kimi, Codex `-c`) set no approval, permission or sandbox keys, and CanvasTTY
 still applies the subagent's own profile, hooks and isolation layer. An account run uses the account's own Claude/Codex
 home, so the person's `~/.claude` or `~/.codex` settings (their own allow or deny rules) are not read there.
 
+OpenRouter carries only the Assistant's Jev decisions, never model traffic. An account on `openrouter.ai` (or a
+subdomain) still runs an agent you start yourself, but a subagent is refused on it, and routes mark it
+`decisions-only` without `launchOptions`, so `pick_account` skips it. OpenCode on an account sees
+only that account's provider (`enabled_providers`), and its titles, summaries, compaction and own subagents use the
+account's model (`small_model` and each native agent's `model`), whatever your global OpenCode config names.
+
 ## What it does to a launch
 
 - Claude Code: `ANTHROPIC_BASE_URL` (Ollama gets its server root), `ANTHROPIC_AUTH_TOKEN` (the key, or `ollama` for a

@@ -49,6 +49,21 @@ export const PRESETS: readonly Preset[] = Object.freeze([
   { id: 'custom-openai', label: 'Other OpenAI-compatible API', protocol: 'openai', baseUrl: null, model: '' }
 ] satisfies Preset[]);
 
+/**
+ * The owner's rule: OpenRouter carries only the Assistant's Jev decision calls, never model traffic. An account whose
+ * endpoint is openrouter.ai or a subdomain (the OpenRouter presets, or a custom address there) may still run an agent the
+ * person starts themselves, but never a delegated launch (a subagent), and it is never offered as a route. An address
+ * that does not parse counts as one (fail closed).
+ */
+export function isDecisionOnlyHost(url: string): boolean {
+  let host: string;
+  try { host = new URL(url).hostname.toLowerCase().replace(/\.+$/u, ''); } catch { return true; }
+  return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+}
+export const decisionsOnlyAccount = (account: Pick<Account, 'preset' | 'baseUrl'>): boolean =>
+  account.preset === 'openrouter-openai' || account.preset === 'openrouter-anthropic' || isDecisionOnlyHost(account.baseUrl);
+export const DECISIONS_ONLY_REASON = 'OpenRouter is for Jev\'s decisions only: model traffic never goes to openrouter.ai';
+
 export interface Account {
   /** `[a-z0-9][a-z0-9-]{0,39}`; the key is the plugin secret `key.<id>`. */
   id: string;

@@ -6,14 +6,16 @@
  * launches, sends a key anywhere or asks a model. The agent's own CLI sign-in is CanvasTTY's, not this plugin's: a
  * spawn without launchOptions uses it.
  */
-import { HARNESS_LABELS, HARNESSES, accountKeyed, harnessSupport, ollamaShapeOf, presetOf, type Account, type Harness } from '../shared/accounts.ts';
+import { DECISIONS_ONLY_REASON, HARNESS_LABELS, HARNESSES, accountKeyed, decisionsOnlyAccount, harnessSupport, ollamaShapeOf, presetOf, type Account, type Harness } from '../shared/accounts.ts';
 import { parseOllamaModelRef } from '../shared/ollamaModelRef.ts';
 import { ollamaVersionRefusal, type OllamaDetection } from '../launch/ollama.ts';
 import { PROVIDER_EFFORTS, isEffort } from '../launch/effort.ts';
 
 export const PLUGIN_ID = 'canvastty-accounts';
 
-export type RouteState = 'ready' | 'no-key' | 'key-for-other-address' | 'ollama-down' | 'ollama-old' | 'model-missing' | 'no-tools' | 'cloud-off' | 'no-effort';
+export type RouteState = 'ready' | 'no-key' | 'key-for-other-address' | 'ollama-down' | 'ollama-old' | 'model-missing' | 'no-tools' | 'cloud-off' | 'no-effort'
+  /** An OpenRouter account: OpenRouter is for the Assistant's Jev decisions only, never a subagent's model traffic. */
+  | 'decisions-only';
 
 /** Accounts probed at once (keys through the host, Ollama servers over loopback). */
 const PROBE_CONCURRENCY = 4;
@@ -48,6 +50,8 @@ export const launchOptionsFor = (accountId: string, effort = 'default'): Record<
 interface Evaluated { state: RouteState; reason?: string; ollamaVersion?: string | null }
 
 async function stateOf(account: Account, facts: RouteFacts): Promise<Evaluated> {
+  // Before anything is probed: its key is not even read.
+  if (decisionsOnlyAccount(account)) return { state: 'decisions-only', reason: DECISIONS_ONLY_REASON };
   if (accountKeyed(account)) {
     const key = await facts.key(account);
     if (key === 'missing') return { state: 'no-key', reason: 'no key is saved for it (Accounts settings)' };

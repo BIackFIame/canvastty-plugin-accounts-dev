@@ -29,6 +29,8 @@ export const LAUNCH_FILES = '{launchFiles}';
  * one key that comes from the account is OpenCode's model name, so such a name is refused here with a clear reason.
  */
 export const APPROVAL_CONFIG_KEY = /permission|approv|yolo|sandbox|dangerous|bypass|auto_?accept|trust/i;
+/** OpenCode 1.18.33's own agents (`opencode agent list`): a global config may give any of them a model of its own. */
+export const OPENCODE_NATIVE_AGENTS = ['build', 'plan', 'general', 'explore', 'title', 'summary', 'compaction'] as const;
 const CODEX_FALLBACK_CONTEXT = 128_000;
 const KIMI_FALLBACK_CONTEXT = 32_768;
 
@@ -193,6 +195,12 @@ function codexPlan(input: HarnessInput, context: number | null): Contribution {
  * OpenCode: a provider in a private config file (OPENCODE_CONFIG; CanvasTTY itself owns OPENCODE_CONFIG_CONTENT), the
  * openai-compatible SDK for OpenAI-style APIs and Ollama (<server>/v1), the anthropic SDK with /v1 for Anthropic-style
  * APIs (L28). The key is `{env:CTTY_MODEL_API_KEY}`, substituted by OpenCode as raw text (see apiKeyHygiene).
+ *
+ * The run sees only the account's provider: `enabled_providers` (which outranks the person's global config, merged
+ * before this file) keeps OpenCode Zen and any provider the global config names unloaded, and `small_model` sends
+ * titles and summaries to the account's own model (an account has one model, so it is also the cheapest one known).
+ * Each native agent's `model` (title, summary, compaction, the general and explore subagents, build, plan) is pinned
+ * there too, so an `agent.<name>.model` in the global config can neither send its calls elsewhere nor make them fail.
  */
 function openCodePlan(input: HarnessInput, context: number | null): Contribution {
   if (APPROVAL_CONFIG_KEY.test(input.model) || APPROVAL_CONFIG_KEY.test(input.providerId)) {
@@ -210,7 +218,10 @@ function openCodePlan(input: HarnessInput, context: number | null): Contribution
     env: { OPENCODE_CONFIG: `${LAUNCH_FILES}/opencode.json` },
     secretEnv: input.secretKey !== undefined ? { [MODEL_KEY_ENV]: input.secretKey } : {},
     args: ['--model', model],
-    files: [{ relPath: 'opencode.json', content: JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { [input.providerId]: provider }, model }) }]
+    files: [{ relPath: 'opencode.json', content: JSON.stringify({
+      $schema: 'https://opencode.ai/config.json', enabled_providers: [input.providerId], provider: { [input.providerId]: provider }, model, small_model: model,
+      agent: Object.fromEntries(OPENCODE_NATIVE_AGENTS.map(name => [name, { model }]))
+    }) }]
   };
 }
 

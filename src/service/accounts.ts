@@ -1,8 +1,8 @@
 import type { Host } from '../rpc.ts';
 import { apiKeyProblem, apiKeyProblemMessage, envSubstitutionProblem, openCodeKeyRefusal } from '../shared/apiKeyHygiene.ts';
 import {
-  HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, harnessSupport, loadSettings, ollamaShapeOf, ollamaWireModel, protocolOf, secretKeyOf,
-  validateSettings, type Account, type AccountsSettings, type Harness
+  DECISIONS_ONLY_REASON, HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, decisionsOnlyAccount, harnessSupport, loadSettings, ollamaShapeOf,
+  ollamaWireModel, protocolOf, secretKeyOf, validateSettings, type Account, type AccountsSettings, type Harness
 } from '../shared/accounts.ts';
 import { buildHarnessLaunch, codexTrustArguments, type Contribution } from '../launch/harness.ts';
 import { effortArguments } from '../launch/effort.ts';
@@ -247,6 +247,9 @@ export class AccountsService {
     }
     const account = this.find(accountId);
     if (!account) return refuse(`Model account ${accountId.slice(0, 40)} no longer exists; choose another one in the launcher.`);
+    // A subagent's options come from a model (an orchestrator or the Assistant's Auto), so it never runs on OpenRouter;
+    // an agent the person starts themselves still may.
+    if (context.role === 'subagent' && decisionsOnlyAccount(account)) return refuse(`${account.label} cannot run a subagent: ${DECISIONS_ONLY_REASON}.`);
     const harness = HARNESSES.find(entry => entry === context.provider) as Harness | undefined;
     if (!harness || !account.agents.includes(harness)) return refuse(`${account.label} is not set up for ${(HARNESS_LABELS as Record<string, string>)[context.provider] ?? context.provider}.`);
     const support = harnessSupport(harness, account);

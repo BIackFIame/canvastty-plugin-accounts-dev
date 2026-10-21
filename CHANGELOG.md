@@ -6,6 +6,8 @@ Requires the CanvasTTY core with plugin API v2 and `launch.delegable`: the upcom
 
 ### What you'll notice
 
+- OpenRouter is for the Assistant's Jev decisions only: a subagent on an OpenRouter account (`openrouter.ai` or a subdomain, preset or custom) is refused, and `list_routes` marks such accounts `decisions-only` with no `launchOptions`, so `pick_account` never chooses them. An agent you start yourself on one still runs.
+- OpenCode on an account no longer sends titles or summaries to a provider your global OpenCode config names (such as OpenCode Zen): its config sets `enabled_providers` to the account's provider, and `small_model` and the model of each native agent (title, summary, compaction, general, explore, build, plan) to the account's model, so a global `agent.<name>.model` can neither redirect those calls nor make them fail.
 - No more losing accounts when storage cannot be read at startup: the page and launches refuse with "try again" instead of showing an empty list that the next save would write over your accounts and key bindings.
 - A failed save no longer leaves the page showing an account that is not saved, and a removal that did not save keeps the account's agent homes.
 - `list_routes` and `pick_account` answer sooner with many accounts: they probe only the accounts a requested row needs, four at a time instead of one after another.

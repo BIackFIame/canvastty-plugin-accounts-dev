@@ -369,3 +369,51 @@ test('an Ollama answer without Content-Length is cut off at the size cap while i
   const small = async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"version":"0.12.0"}')); controller.close(); } }), { status: 200 });
   assert.deepEqual(await ollamaHttp('http://127.0.0.1:1', small)('GET', '/api/version'), { status: 200, json: { version: '0.12.0' } });
 });
+
+test('OpenRouter accounts: refused for a subagent, still the person\'s own choice, never offered as a route', async (t) => {
+  const { service, secrets, context, host } = await fixture(t);
+  await service.save({ version: 1, accounts: [
+    { id: 'or', label: 'OR', preset: 'openrouter-anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-4.6', agents: ['claude', 'opencode'] },
+    { id: 'or-custom', label: 'OR custom', preset: 'custom-openai', baseUrl: 'https://eu.openrouter.ai/api/v1', model: 'z-ai/glm-4.6', agents: ['opencode'] },
+    ...service.settings.accounts
+  ] });
+  secrets['key.or'] = KEY; secrets['key.or-custom'] = KEY; secrets['key.glm'] = KEY;
+  for (const id of ['or', 'or-custom', 'glm']) await service.keyChanged(id);
+
+  // Delegated launches (an orchestrator's or Auto's spawn_agent): refused before the key is read.
+  const real = host.callHost;
+  const reads = [];
+  host.callHost = async (method, params) => { if (method === 'secrets.get') reads.push(params.key); return real(method, params); };
+  for (const [provider, account] of [['claude', 'or'], ['opencode', 'or'], ['opencode', 'or-custom']]) {
+    const refused = await service.prepare(context({ provider, role: 'subagent', options: { account } }));
+    assert.match(refused.refuse.reason, /cannot run a subagent: OpenRouter is for Jev's decisions only/, `${provider} ${account}`);
+  }
+  assert.deepEqual(reads, [], 'no key read for a refused delegated launch');
+  host.callHost = real;
+
+  // The person's own launch keeps working, and the launcher still lists the account.
+  const person = await service.prepare(context({ provider: 'opencode', options: { account: 'or' } }));
+  assert.equal(person.refuse, undefined);
+  assert.match(JSON.parse(person.files[0].content).provider[Object.keys(JSON.parse(person.files[0].content).provider)[0]].options.baseURL, /^https:\/\/openrouter\.ai\//);
+  assert.ok(service.launchOptions('opencode').account.some(option => option.value === 'or'));
+  // A subagent on a non-OpenRouter account is unaffected.
+  const glm = await service.prepare(context({ provider: 'opencode', role: 'subagent', options: { account: 'glm' } }));
+  assert.equal(glm.refuse, undefined);
+  assert.deepEqual(glm.secretEnv, { CTTY_MODEL_API_KEY: 'key.glm' });
+
+  // Routes: marked, never ready, no launchOptions; pick_account skips them even though they come first.
+  const listed = (await service.tool('list_routes', { provider: 'opencode' })).content.routes;
+  assert.deepEqual(listed.map(row => [row.accountId, row.state]), [['or', 'decisions-only'], ['or-custom', 'decisions-only'], ['qwen-local', 'ready'], ['glm', 'ready']]);
+  for (const row of listed.slice(0, 2)) {
+    assert.equal(row.launchOptions, undefined);
+    assert.match(row.reason, /Jev's decisions only/);
+  }
+  const pick = (await service.tool('pick_account', { provider: 'opencode' })).content;
+  assert.equal(pick.accountId, 'qwen-local');
+  assert.match(pick.why, /skipped OR \(z-ai\/glm-4\.6\): OpenRouter is for Jev's decisions only/);
+  // With only OpenRouter accounts there is no route at all.
+  await service.save({ version: 1, accounts: service.settings.accounts.filter(entry => entry.id.startsWith('or')) });
+  const none = await service.tool('pick_account', { provider: 'opencode' });
+  assert.equal(none.isError, true);
+  assert.match(none.content, /none is ready: OR .*decisions only/);
+});

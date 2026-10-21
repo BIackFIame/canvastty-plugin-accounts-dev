@@ -145,6 +145,47 @@ test('through CanvasTTY\'s own supervisor and launch pipeline: the launcher list
   await prepared.cleanup();
 });
 
+test('through CanvasTTY\'s launch pipeline: OpenCode gets the pinned provider config; an OpenRouter subagent is refused (CANVASTTY_REPO)', { skip: !process.env.CANVASTTY_REPO }, async (t) => {
+  const repo = process.env.CANVASTTY_REPO;
+  const { LaunchPipeline } = await import(join(repo, 'src/main/services/LaunchPipeline.ts'));
+  const { PluginServiceSupervisor } = await import(join(repo, 'src/main/services/PluginServiceSupervisor.ts'));
+  const { validatePluginManifest } = await import(join(repo, 'src/main/services/PluginManager.ts'));
+  const ollama = await startFakeOllama();
+  t.after(() => ollama.close());
+  const checked = validatePluginManifest(manifest);
+  const storage = { accounts: { settings: { version: 1, accounts: [
+    { id: 'qwen', label: 'Qwen', preset: 'ollama-local', baseUrl: ollama.url, model: 'qwen3.5:9b', agents: ['opencode'] },
+    { id: 'or', label: 'OR', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-4.6', agents: ['opencode'] }
+  ] }, keyOrigins: {} } };
+  const supervisor = new PluginServiceSupervisor({
+    command: process.execPath, hostVersion: '9.9.9', locale: () => 'en', stopGraceMs: 300,
+    host: { storageGet: async (_plugin, key) => storage[key] ?? null, storageSet: async (_plugin, key, value) => { storage[key] = value; }, emit: () => undefined }
+  });
+  t.after(() => supervisor.dispose());
+  const entryPath = join(root, 'services', 'accounts.mjs');
+  await supervisor.sync([{ pluginId: checked.id, serviceId: 'accounts', root, entryPath, sha256: createHash('sha256').update(readFileSync(entryPath)).digest('hex'),
+    dataDir: join(base, 'core-data-opencode'), permissions: checked.permissions }]);
+  const pipeline = new LaunchPipeline({
+    contributors: () => [{ pluginId: checked.id, pluginName: checked.name, serviceId: 'accounts', launch: checked.services[0].launch, secrets: true }],
+    call: (pluginId, serviceId, method, params, timeoutMs) => supervisor.hostCall(pluginId, serviceId, method, params, timeoutMs),
+    secret: async () => null,
+    runsRoot: join(base, 'runs-opencode')
+  });
+  const launch = (account, role) => pipeline.prepare({ sessionId: `oc-${account}-${role}`, provider: 'opencode', profile: 'normal', role, cwd: project, restoring: false, resume: false,
+    environment: null, options: pipeline.normalizeOptions('opencode', { [checked.id]: { account } }, { delegated: role === 'subagent' }) });
+  const refused = await launch('or', 'subagent');
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /OpenRouter is for Jev's decisions only/);
+  const prepared = await launch('qwen', 'subagent');
+  assert.equal(prepared.ok, true, prepared.reason);
+  const config = JSON.parse(readFileSync(prepared.env.OPENCODE_CONFIG, 'utf8'));
+  const [providerId] = Object.keys(config.provider);
+  assert.deepEqual(config.enabled_providers, [providerId]);
+  assert.equal(config.small_model, config.model);
+  assert.equal(config.model, `${providerId}/qwen3.5:9b:local`);
+  await prepared.cleanup();
+});
+
 test('over JSON-RPC: a storage read that fails at start is retried, and nothing is saved over the accounts meanwhile', async (t) => {
   const storage = { accounts: { settings: { version: 1, accounts: [{ id: 'qwen', label: 'Qwen', preset: 'ollama-local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b', agents: ['claude'] }] }, keyOrigins: {} } };
   const saved = structuredClone(storage.accounts);

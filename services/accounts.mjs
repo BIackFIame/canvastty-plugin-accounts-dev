@@ -305,6 +305,17 @@ var PRESETS = Object.freeze([
   { id: "custom-anthropic", label: "Other Anthropic-compatible API", protocol: "anthropic", baseUrl: null, model: "" },
   { id: "custom-openai", label: "Other OpenAI-compatible API", protocol: "openai", baseUrl: null, model: "" }
 ]);
+function isDecisionOnlyHost(url) {
+  let host;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/\.+$/u, "");
+  } catch {
+    return true;
+  }
+  return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
+}
+var decisionsOnlyAccount = (account) => account.preset === "openrouter-openai" || account.preset === "openrouter-anthropic" || isDecisionOnlyHost(account.baseUrl);
+var DECISIONS_ONLY_REASON = "OpenRouter is for Jev's decisions only: model traffic never goes to openrouter.ai";
 var EMPTY_SETTINGS = Object.freeze({ version: 1, accounts: [] });
 var MAX_ACCOUNTS = 48;
 var presetOf = (account) => PRESETS.find((preset) => preset.id === account.preset);
@@ -442,6 +453,7 @@ var MODEL_KEY_ENV = "CTTY_MODEL_API_KEY";
 var OLLAMA_PLACEHOLDER_KEY = "ollama";
 var LAUNCH_FILES = "{launchFiles}";
 var APPROVAL_CONFIG_KEY = /permission|approv|yolo|sandbox|dangerous|bypass|auto_?accept|trust/i;
+var OPENCODE_NATIVE_AGENTS = ["build", "plan", "general", "explore", "title", "summary", "compaction"];
 var CODEX_FALLBACK_CONTEXT = 128e3;
 var KIMI_FALLBACK_CONTEXT = 32768;
 var toml = (value) => JSON.stringify(value);
@@ -579,7 +591,14 @@ function openCodePlan(input, context) {
     env: { OPENCODE_CONFIG: `${LAUNCH_FILES}/opencode.json` },
     secretEnv: input.secretKey !== void 0 ? { [MODEL_KEY_ENV]: input.secretKey } : {},
     args: ["--model", model],
-    files: [{ relPath: "opencode.json", content: JSON.stringify({ $schema: "https://opencode.ai/config.json", provider: { [input.providerId]: provider }, model }) }]
+    files: [{ relPath: "opencode.json", content: JSON.stringify({
+      $schema: "https://opencode.ai/config.json",
+      enabled_providers: [input.providerId],
+      provider: { [input.providerId]: provider },
+      model,
+      small_model: model,
+      agent: Object.fromEntries(OPENCODE_NATIVE_AGENTS.map((name) => [name, { model }]))
+    }) }]
   };
 }
 function qwenPlan(input) {
@@ -869,6 +888,7 @@ var hostOf = (url) => {
 };
 var launchOptionsFor = (accountId, effort = "default") => ({ [PLUGIN_ID]: { account: accountId, effort, trustFolder: false } });
 async function stateOf(account, facts) {
+  if (decisionsOnlyAccount(account)) return { state: "decisions-only", reason: DECISIONS_ONLY_REASON };
   if (accountKeyed(account)) {
     const key = await facts.key(account);
     if (key === "missing") return { state: "no-key", reason: "no key is saved for it (Accounts settings)" };
@@ -1159,6 +1179,7 @@ var AccountsService = class {
     }
     const account = this.find(accountId);
     if (!account) return refuse(`Model account ${accountId.slice(0, 40)} no longer exists; choose another one in the launcher.`);
+    if (context.role === "subagent" && decisionsOnlyAccount(account)) return refuse(`${account.label} cannot run a subagent: ${DECISIONS_ONLY_REASON}.`);
     const harness = HARNESSES.find((entry) => entry === context.provider);
     if (!harness || !account.agents.includes(harness)) return refuse(`${account.label} is not set up for ${HARNESS_LABELS[context.provider] ?? context.provider}.`);
     const support = harnessSupport(harness, account);
