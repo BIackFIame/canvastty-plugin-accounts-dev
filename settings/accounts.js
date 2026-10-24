@@ -72,6 +72,16 @@
     for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
   }
 
+  // src/shared/quotaText.ts
+  var tenths = (value) => Math.round(Math.max(0, Math.min(100, value)) * 10) / 10;
+  var number = (locale2, value) => new Intl.NumberFormat(locale2 === "ru" ? "ru-RU" : "en-US", { maximumFractionDigits: 1 }).format(value);
+  function quotaShareText(locale2, remainingPercent, window2 = null) {
+    const left = tenths(remainingPercent);
+    const used = tenths(100 - left);
+    const text = locale2 === "ru" ? `\u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u043E ${number(locale2, used)}% \xB7 \u043E\u0441\u0442\u0430\u043B\u043E\u0441\u044C ${number(locale2, left)}%` : `${number(locale2, used)}% used \xB7 ${number(locale2, left)}% left`;
+    return window2 ? `${text} (${window2})` : text;
+  }
+
   // src/ui/settings.ts
   var host = window.CanvasTTYPlugin;
   var SERVICE = "accounts";
@@ -117,7 +127,7 @@
       quota: "Quota",
       readNow: "Read now",
       quotaState: { ok: "room left", low: "running low", exhausted: "used up", "presumed-reset": "probably reset (reading again)", unknown: "unknown", stale: "unknown (old read)" },
-      left: (percent, window2) => `${percent}% left${window2 ? ` (${window2})` : ""}`,
+      left: (percent, window2) => quotaShareText("en", percent, window2),
       resets: (time) => `resets ${time}`,
       age: (minutes) => minutes === null ? "not read yet" : minutes < 1 ? "read just now" : `read ${minutes} min ago`,
       passive: "Only limit messages are seen for this provider; its quota is not read.",
@@ -186,7 +196,7 @@
       quota: "\u041A\u0432\u043E\u0442\u0430",
       readNow: "\u041F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C \u0441\u0435\u0439\u0447\u0430\u0441",
       quotaState: { ok: "\u0435\u0441\u0442\u044C \u0437\u0430\u043F\u0430\u0441", low: "\u0437\u0430\u043A\u0430\u043D\u0447\u0438\u0432\u0430\u0435\u0442\u0441\u044F", exhausted: "\u0438\u0441\u0447\u0435\u0440\u043F\u0430\u043D\u0430", "presumed-reset": "\u0432\u0435\u0440\u043E\u044F\u0442\u043D\u043E, \u0441\u0431\u0440\u043E\u0448\u0435\u043D\u0430 (\u0447\u0438\u0442\u0430\u044E \u0437\u0430\u043D\u043E\u0432\u043E)", unknown: "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430", stale: "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430 (\u0434\u0430\u0432\u043D\u0435\u0435 \u0447\u0442\u0435\u043D\u0438\u0435)" },
-      left: (percent, window2) => `\u043E\u0441\u0442\u0430\u043B\u043E\u0441\u044C ${percent}%${window2 ? ` (${window2})` : ""}`,
+      left: (percent, window2) => quotaShareText("ru", percent, window2),
       resets: (time) => `\u0441\u0431\u0440\u043E\u0441 ${time}`,
       age: (minutes) => minutes === null ? "\u0435\u0449\u0451 \u043D\u0435 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430" : minutes < 1 ? "\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0442\u043E" : `\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D\u0430 ${minutes} \u043C\u0438\u043D \u043D\u0430\u0437\u0430\u0434`,
       passive: "\u0423 \u044D\u0442\u043E\u0433\u043E \u043F\u0440\u043E\u0432\u0430\u0439\u0434\u0435\u0440\u0430 \u0432\u0438\u0434\u043D\u044B \u0442\u043E\u043B\u044C\u043A\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F \u043E \u043B\u0438\u043C\u0438\u0442\u0435; \u043A\u0432\u043E\u0442\u0430 \u043D\u0435 \u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F.",

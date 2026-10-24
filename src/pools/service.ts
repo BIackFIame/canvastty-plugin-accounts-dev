@@ -751,7 +751,7 @@ export class PoolService {
     if (!chosen) throw new Error(`No ${POOL_INFO[provider].label} pool account is free: ${summarize(skipped)}.`);
     this.reservations.set(chosen.account.id, [...(this.reservations.get(chosen.account.id) ?? []), this.now() + RESERVATION_MS]);
     const quota = routeQuota(chosen.facts.quota);
-    const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${quota.remainingPercent}% left (${quota.confidence})`;
+    const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${Math.round((100 - quota.remainingPercent) * 10) / 10}% used, ${quota.remainingPercent}% left (${quota.confidence})`;
     return {
       accountId: chosen.account.id, account: chosen.account.label, trust: chosen.account.trust, quota,
       launchOptions: { [PLUGIN_ID]: { account: `${MEMBER_VALUE}${chosen.account.id}`, effort: request.effort, trustFolder: false } },

@@ -9,6 +9,7 @@ import {
 } from '../shared/accounts.ts';
 import type { CheckResult } from '../service/accounts.ts';
 import type { PoolsView, PoolMemberView } from '../pools/service.ts';
+import { quotaShareText } from '../shared/quotaText.ts';
 
 interface PluginHost {
   onContext(listener: (context: { appearance: { locale: 'ru' | 'en' } }) => void): void;
@@ -50,7 +51,7 @@ const STRINGS = {
     keyCheckFail: (problem: string) => `Key: ${problem}`,
     quota: 'Quota', readNow: 'Read now',
     quotaState: { ok: 'room left', low: 'running low', exhausted: 'used up', 'presumed-reset': 'probably reset (reading again)', unknown: 'unknown', stale: 'unknown (old read)' } as Record<string, string>,
-    left: (percent: number, window: string | null) => `${percent}% left${window ? ` (${window})` : ''}`,
+    left: (percent: number, window: string | null) => quotaShareText('en', percent, window),
     resets: (time: string) => `resets ${time}`,
     age: (minutes: number | null) => minutes === null ? 'not read yet' : minutes < 1 ? 'read just now' : `read ${minutes} min ago`,
     passive: 'Only limit messages are seen for this provider; its quota is not read.',
@@ -86,7 +87,7 @@ const STRINGS = {
     keyCheckFail: (problem: string) => `Ключ: ${problem}`,
     quota: 'Квота', readNow: 'Прочитать сейчас',
     quotaState: { ok: 'есть запас', low: 'заканчивается', exhausted: 'исчерпана', 'presumed-reset': 'вероятно, сброшена (читаю заново)', unknown: 'неизвестна', stale: 'неизвестна (давнее чтение)' } as Record<string, string>,
-    left: (percent: number, window: string | null) => `осталось ${percent}%${window ? ` (${window})` : ''}`,
+    left: (percent: number, window: string | null) => quotaShareText('ru', percent, window),
     resets: (time: string) => `сброс ${time}`,
     age: (minutes: number | null) => minutes === null ? 'ещё не прочитана' : minutes < 1 ? 'прочитана только что' : `прочитана ${minutes} мин назад`,
     passive: 'У этого провайдера видны только сообщения о лимите; квота не читается.',

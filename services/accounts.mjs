@@ -1182,7 +1182,7 @@ function viewOf(record2, now) {
   const remaining = Math.max(0, Math.round((100 - tight.usedPercent) * 10) / 10);
   const view = { ...base, remainingPercent: remaining, window: tight.label, resetsAt: tight.resetsAt, confidence };
   if (remaining <= 0) return { ...view, state: "exhausted", note: `${tight.label} used up${tight.resetsAt ? `; resets ${time(tight.resetsAt)}` : ""}` };
-  const note = `${tight.label}: ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ""}${record2.launchesSinceRead ? `; ${record2.launchesSinceRead} launch(es) since the read` : ""}`;
+  const note = `${tight.label}: ${Math.round((100 - remaining) * 10) / 10}% used, ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ""}${record2.launchesSinceRead ? `; ${record2.launchesSinceRead} launch(es) since the read` : ""}`;
   if (presumed) return { ...view, state: "presumed-reset", note: `${note}; another window probably reset since the read` };
   return { ...view, state: remaining < LOW_PERCENT ? "low" : "ok", note };
 }
@@ -2491,7 +2491,7 @@ var PoolService = class {
     if (!chosen) throw new Error(`No ${POOL_INFO[provider].label} pool account is free: ${summarize(skipped)}.`);
     this.reservations.set(chosen.account.id, [...this.reservations.get(chosen.account.id) ?? [], this.now() + RESERVATION_MS]);
     const quota = routeQuota(chosen.facts.quota);
-    const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${quota.remainingPercent}% left (${quota.confidence})`;
+    const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${Math.round((100 - quota.remainingPercent) * 10) / 10}% used, ${quota.remainingPercent}% left (${quota.confidence})`;
     return {
       accountId: chosen.account.id,
       account: chosen.account.label,

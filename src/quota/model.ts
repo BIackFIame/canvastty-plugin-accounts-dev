@@ -267,7 +267,7 @@ export function viewOf(record: QuotaRecord, now: number): QuotaView {
   const remaining = Math.max(0, Math.round((100 - tight.usedPercent!) * 10) / 10);
   const view = { ...base, remainingPercent: remaining, window: tight.label, resetsAt: tight.resetsAt, confidence };
   if (remaining <= 0) return { ...view, state: 'exhausted', note: `${tight.label} used up${tight.resetsAt ? `; resets ${time(tight.resetsAt)}` : ''}` };
-  const note = `${tight.label}: ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ''}${record.launchesSinceRead ? `; ${record.launchesSinceRead} launch(es) since the read` : ''}`;
+  const note = `${tight.label}: ${Math.round((100 - remaining) * 10) / 10}% used, ${remaining}% left${tight.resetsAt ? `, resets ${time(tight.resetsAt)}` : ''}${record.launchesSinceRead ? `; ${record.launchesSinceRead} launch(es) since the read` : ''}`;
   if (presumed) return { ...view, state: 'presumed-reset', note: `${note}; another window probably reset since the read` };
   return { ...view, state: remaining < LOW_PERCENT ? 'low' : 'ok', note };
 }
