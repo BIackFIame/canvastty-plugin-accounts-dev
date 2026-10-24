@@ -243,10 +243,10 @@ async function service(t, { answers, now, accounts = ACCOUNTS, keyOrigins } = {}
   return { service: accountsService, storage, secrets, logs, emitted, network, clock, dataDir, host, reload: () => { const next = new AccountsService({ host, dataDir, saved: storage.accounts, quotaFetch: network.fetch, now: () => clock.now, random: () => 0.5 }); return next; } };
 }
 
-test('only Z.AI / BigModel accounts are read, each on its own host, with its own key, redirects refused', async (t) => {
+test('only Z.AI / BigModel / MiniMax accounts are read, each on its own host, with its own key, redirects refused', async (t) => {
   assert.equal(quotaUrlOf(ACCOUNTS[0]), 'https://api.z.ai/api/monitor/usage/quota/limit');
   assert.equal(quotaUrlOf(ACCOUNTS[1]), 'https://open.bigmodel.cn/api/monitor/usage/quota/limit');
-  assert.equal(quotaUrlOf(ACCOUNTS[2]), null);
+  assert.equal(quotaUrlOf(ACCOUNTS[2]), 'https://api.minimax.io/v1/token_plan/remains');
   assert.equal(quotaUrlOf(ACCOUNTS[3]), null);
   assert.equal(quotaUrlOf({ preset: 'custom-anthropic', baseUrl: 'https://api.z.ai.evil.example/api' }), null);
   assert.equal(quotaUrlOf({ preset: 'ollama-local', baseUrl: 'http://127.0.0.1:11434' }), null);
@@ -256,12 +256,12 @@ test('only Z.AI / BigModel accounts are read, each on its own host, with its own
   await s.quota.tick();
   await s.quota.tick();
   const hosts = network.calls.map(call => new URL(call.url).host).sort();
-  assert.deepEqual(hosts, ['api.z.ai', 'api.z.ai', 'open.bigmodel.cn']);
+  assert.deepEqual(hosts, ['api.minimax.io', 'api.z.ai', 'api.z.ai', 'open.bigmodel.cn']);
   for (const call of network.calls) {
     assert.equal(call.init.redirect, 'error');
     assert.equal(call.init.method, 'GET');
     assert.equal(call.init.headers.Authorization, `Bearer ${KEY}`);
-    assert.equal(new URL(call.url).pathname, '/api/monitor/usage/quota/limit');
+    assert.equal(new URL(call.url).pathname, new URL(call.url).host === 'api.minimax.io' ? '/v1/token_plan/remains' : '/api/monitor/usage/quota/limit');
   }
 });
 
@@ -307,7 +307,8 @@ test('exhaustion → pick_account skips the account → early reset read → it 
   assert.equal(routes[1].quota.source, 'zai-quota-api');
   let pick = (await s.tool('pick_account', { provider: 'claude' })).content;
   assert.equal(pick.accountId, 'glm-2');
-  assert.match(pick.why, /GLM \(glm-4\.6\): its quota is used up/u);
+  assert.equal(pick.kind, 'subscription');
+  assert.match(pick.why, /GLM \(its quota is used up/u);
   // The exhausted account is read again within minutes, before its predicted reset: room again.
   clock.now += SCHEDULE.exhaustedMs + 30_000;
   answers.push({ body: early });
@@ -375,14 +376,15 @@ test('a launch on an account counts until the next read and makes it read more o
   assert.match(view.note, /2 launch\(es\) since the read/u);
 });
 
-test('passive limits for an account whose quota cannot be read (MiniMax) are kept and expire', async (t) => {
-  const { service: s, clock } = await service(t, { accounts: [ACCOUNTS[2]] });
-  assert.equal(s.quota.view(ACCOUNTS[2]), null);
-  s.quota.noteLimit(ACCOUNTS[2], { source: 'host-activity', at: NOW, windows: [], exhausted: { until: NOW + H, code: 'limit' } });
+test('passive limits for an account whose quota cannot be read (a compatible API) are kept and expire', async (t) => {
+  const passive = { id: 'other', label: 'Other', preset: 'custom-anthropic', baseUrl: 'https://llm.example.test/anthropic', model: 'm-1', agents: ['claude'] };
+  const { service: s, clock } = await service(t, { accounts: [passive] });
+  assert.equal(s.quota.view(passive), null);
+  s.quota.noteLimit(passive, { source: 'host-activity', at: NOW, windows: [], exhausted: { until: NOW + H, code: 'limit' } });
   await s.quota.tick();
-  assert.equal(s.quota.view(ACCOUNTS[2]).state, 'exhausted');
+  assert.equal(s.quota.view(passive).state, 'exhausted');
   clock.now += H + MIN;
-  assert.equal(s.quota.view(ACCOUNTS[2]).state, 'presumed-reset');
+  assert.equal(s.quota.view(passive).state, 'presumed-reset');
   const routes = (await s.tool('list_routes', { provider: 'claude' })).content.routes;
   assert.equal(routes[0].state, 'ready');
 });

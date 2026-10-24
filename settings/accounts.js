@@ -10,6 +10,111 @@
     return null;
   }
 
+  // src/plans/plans.ts
+  var PLAN_PROVIDERS = ["glm", "minimax"];
+  var PLAN_HARNESSES = Object.freeze(["claude", "opencode"]);
+  var DEFAULT_CONCURRENCY = 2;
+  var MAX_CONCURRENCY = 16;
+  var PLAN_INFO = Object.freeze({
+    glm: {
+      label: "GLM Coding Plan",
+      anthropicPath: "/api/anthropic",
+      openaiPath: "/api/coding/paas/v4",
+      regions: { intl: { host: "api.z.ai", label: { en: "Z.AI (international)", ru: "Z.AI (\u043C\u0435\u0436\u0434\u0443\u043D\u0430\u0440\u043E\u0434\u043D\u044B\u0439)" } }, cn: { host: "open.bigmodel.cn", label: { en: "BigModel (China)", ru: "BigModel (\u041A\u0438\u0442\u0430\u0439)" } } },
+      legacyHosts: {},
+      model: "glm-5.3",
+      smallModel: "glm-5.3-flash",
+      preset: "zai-anthropic",
+      presets: ["zai-anthropic", "zai-openai"]
+    },
+    minimax: {
+      label: "MiniMax Coding Plan",
+      anthropicPath: "/anthropic",
+      openaiPath: "/v1",
+      regions: { intl: { host: "api.minimax.io", label: { en: "minimax.io (international)", ru: "minimax.io (\u043C\u0435\u0436\u0434\u0443\u043D\u0430\u0440\u043E\u0434\u043D\u044B\u0439)" } }, cn: { host: "api.minimax.cn", label: { en: "minimax.cn (China)", ru: "minimax.cn (\u041A\u0438\u0442\u0430\u0439)" } } },
+      legacyHosts: { "api.minimaxi.com": "cn" },
+      model: "MiniMax-M3.1-Flash",
+      smallModel: "MiniMax-M3.1-Flash",
+      preset: "minimax-anthropic",
+      presets: ["minimax-anthropic", "minimax-openai"]
+    }
+  });
+  var httpsHost = (url) => {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === "https:" && !parsed.port ? parsed.hostname.toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  };
+  function planOf(account) {
+    const host2 = httpsHost(account.baseUrl);
+    if (!host2) return null;
+    for (const provider of PLAN_PROVIDERS) {
+      const info = PLAN_INFO[provider];
+      if (!info.presets.includes(account.preset) && !["custom-anthropic", "custom-openai"].includes(account.preset)) continue;
+      for (const region of ["intl", "cn"]) if (info.regions[region].host === host2) return { provider, region, host: host2 };
+      const legacy = info.legacyHosts[host2];
+      if (legacy) return { provider, region: legacy, host: host2 };
+    }
+    return null;
+  }
+
+  // src/pools/providers.ts
+  var POOL_INFO = Object.freeze({
+    claude: {
+      label: "Claude Code",
+      homeVariable: "CLAUDE_CONFIG_DIR",
+      env: {},
+      // Linux and Windows (and a macOS Keychain fallback); on macOS the sign-in is a Keychain entry keyed to the folder,
+      // so the core's limits read (or Claude's own .claude.json account marker) tells.
+      credentialFiles: [".credentials.json"],
+      limits: true,
+      limitsReadRefreshes: false,
+      perHome: "one",
+      signIn: { en: "Claude Code starts its first-run setup: choose a theme, then sign in with your Claude account in the browser (or type /login).", ru: "Claude Code \u043D\u0430\u0447\u043D\u0451\u0442 \u043F\u0435\u0440\u0432\u0443\u044E \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0443: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u0435\u043C\u0443 \u0438 \u0432\u043E\u0439\u0434\u0438\u0442\u0435 \u0441\u0432\u043E\u0435\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u044C\u044E Claude \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 (\u0438\u043B\u0438 \u043D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login)." }
+    },
+    codex: {
+      label: "Codex",
+      homeVariable: "CODEX_HOME",
+      env: { CODEX_API_KEY: "", CODEX_ACCESS_TOKEN: "" },
+      credentialFiles: ["auth.json"],
+      limits: true,
+      limitsReadRefreshes: true,
+      perHome: "one",
+      signIn: { en: 'Codex shows its sign-in screen: choose "Sign in with ChatGPT" and finish in the browser.', ru: "Codex \u043F\u043E\u043A\u0430\u0436\u0435\u0442 \u044D\u043A\u0440\u0430\u043D \u0432\u0445\u043E\u0434\u0430: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \xABSign in with ChatGPT\xBB \u0438 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
+    },
+    grok: {
+      label: "Grok",
+      homeVariable: "GROK_HOME",
+      env: {},
+      credentialFiles: ["auth.json"],
+      limits: true,
+      limitsReadRefreshes: false,
+      perHome: "one",
+      signIn: { en: "Grok opens the browser to sign in at grok.com (password or Google).", ru: "Grok \u043E\u0442\u043A\u0440\u043E\u0435\u0442 \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u0434\u043B\u044F \u0432\u0445\u043E\u0434\u0430 \u043D\u0430 grok.com (\u043F\u0430\u0440\u043E\u043B\u044C \u0438\u043B\u0438 Google)." }
+    },
+    kimi: {
+      label: "Kimi",
+      homeVariable: "KIMI_CODE_HOME",
+      env: {},
+      // CanvasTTY reads a Kimi home through one `kimi web` started there, which may refresh the sign-in.
+      credentialFiles: [],
+      credentialFolder: "credentials",
+      limits: true,
+      limitsReadRefreshes: true,
+      perHome: "one",
+      signIn: { en: "Type /login in Kimi and choose Kimi Code (OAuth); finish in the browser.", ru: "\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login \u0432 Kimi \u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 Kimi Code (OAuth); \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
+    }
+  });
+  var NOT_POOLED = Object.freeze({
+    qwen: "Qwen Code has no variable that moves its home (its sign-in is always ~/.qwen), and the Qwen OAuth free tier closed on 2026-04-15.",
+    opencode: "OpenCode Go signs in with an API key, not a browser sign-in: add it as a model account with its key."
+  });
+
+  // src/pools/model.ts
+  var RANK = Object.freeze({ D0: 0, D1: 1, D2: 2, D3: 3 });
+
   // src/shared/accounts.ts
   var HARNESSES = ["claude", "codex", "opencode", "qwen", "kimi"];
   var HARNESS_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", qwen: "Qwen Code", kimi: "Kimi" };
@@ -88,7 +193,7 @@
   var STRINGS = {
     en: {
       title: "Model accounts",
-      lead: "Run Claude Code, Codex, OpenCode, Qwen Code or Kimi on another model: a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API. An account is used only when you choose it in the launcher (Advanced \u2192 Use CanvasTTY Accounts \u2192 Model account) or an orchestrator passes it to a subagent; the agents' own sign-ins stay untouched, and nothing is written to ~/.claude, ~/.codex or ~/.ollama.",
+      lead: "Run Claude Code, Codex, OpenCode, Qwen Code or Kimi on another model: a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API. An account is used only when you choose it in the launcher (Advanced \u2192 Use CanvasTTY Accounts \u2192 Model account) or an orchestrator passes it to a subagent; the agents' own sign-ins stay untouched, and nothing is written to ~/.claude, ~/.codex or ~/.ollama. GLM and MiniMax Coding Plans are under Subscription accounts.",
       none: "No accounts yet.",
       add: "Add account",
       provider: "Provider",
@@ -153,11 +258,19 @@
       poolHomeLimit: (limit) => `CanvasTTY reads quotas for at most ${limit} accounts per plugin; the others stay "unknown". You can still add and use them.`,
       poolNoEvents: 'CanvasTTY sends this plugin no card events, so "one card per account" cannot be checked.',
       poolRemoveNote: "Removing deletes the account's folder with its sign-in. Claude Code on macOS keeps its sign-in in the Keychain: type /logout in a card on the account first if you want that gone too.",
-      notPooled: "Not available as pools:"
+      notPooled: "Not available as pools:",
+      plansLead: `Coding plans sign in with an API key: paste the plan's key once. It is stored in CanvasTTY's encrypted plugin secrets, sent only to the plan's own host, and several cards may run on one account at once. Launch Claude Code or OpenCode on "<plan> pool" to get the account with the most quota left.`,
+      region: "Region",
+      concurrency: "Cards at once",
+      forAuto: "For Auto and other extensions (CanvasTTY adds the key; they never see it)",
+      planAdd: "Add subscription",
+      planKeyFirst: "Paste the plan's API key first.",
+      planHost: (host2) => `key sent only to ${host2}`,
+      planRunning: (running, cap) => `${running} of ${cap} cards running`
     },
     ru: {
       title: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043C\u043E\u0434\u0435\u043B\u0435\u0439",
-      lead: "\u0417\u0430\u043F\u0443\u0441\u043A\u0430\u0439\u0442\u0435 Claude Code, Codex, OpenCode, Qwen Code \u0438\u043B\u0438 Kimi \u043D\u0430 \u0434\u0440\u0443\u0433\u043E\u0439 \u043C\u043E\u0434\u0435\u043B\u0438: \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u043E\u0439 \u0432 Ollama, \u0432 Ollama Cloud, Z.AI, MiniMax, OpenRouter \u0438\u043B\u0438 \u043B\u044E\u0431\u043E\u043C \u0441\u043E\u0432\u043C\u0435\u0441\u0442\u0438\u043C\u043E\u043C API. \u0423\u0447\u0451\u0442\u043D\u0430\u044F \u0437\u0430\u043F\u0438\u0441\u044C \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0435\u0442\u0441\u044F, \u0442\u043E\u043B\u044C\u043A\u043E \u043A\u043E\u0433\u0434\u0430 \u0432\u044B \u0432\u044B\u0431\u0440\u0430\u043B\u0438 \u0435\u0451 \u0432 \u043E\u043A\u043D\u0435 \u0437\u0430\u043F\u0443\u0441\u043A\u0430 (\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u2192 Use CanvasTTY Accounts \u2192 Model account) \u0438\u043B\u0438 \u043E\u0440\u043A\u0435\u0441\u0442\u0440\u0430\u0442\u043E\u0440 \u043F\u0435\u0440\u0435\u0434\u0430\u043B \u0435\u0451 \u0441\u0443\u0431\u0430\u0433\u0435\u043D\u0442\u0443; \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0435 \u0432\u0445\u043E\u0434\u044B \u0430\u0433\u0435\u043D\u0442\u043E\u0432 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F, \u0432 ~/.claude, ~/.codex \u0438 ~/.ollama \u043D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043F\u0438\u0448\u0435\u0442\u0441\u044F.",
+      lead: "\u0417\u0430\u043F\u0443\u0441\u043A\u0430\u0439\u0442\u0435 Claude Code, Codex, OpenCode, Qwen Code \u0438\u043B\u0438 Kimi \u043D\u0430 \u0434\u0440\u0443\u0433\u043E\u0439 \u043C\u043E\u0434\u0435\u043B\u0438: \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u043E\u0439 \u0432 Ollama, \u0432 Ollama Cloud, Z.AI, MiniMax, OpenRouter \u0438\u043B\u0438 \u043B\u044E\u0431\u043E\u043C \u0441\u043E\u0432\u043C\u0435\u0441\u0442\u0438\u043C\u043E\u043C API. \u0423\u0447\u0451\u0442\u043D\u0430\u044F \u0437\u0430\u043F\u0438\u0441\u044C \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0435\u0442\u0441\u044F, \u0442\u043E\u043B\u044C\u043A\u043E \u043A\u043E\u0433\u0434\u0430 \u0432\u044B \u0432\u044B\u0431\u0440\u0430\u043B\u0438 \u0435\u0451 \u0432 \u043E\u043A\u043D\u0435 \u0437\u0430\u043F\u0443\u0441\u043A\u0430 (\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u2192 Use CanvasTTY Accounts \u2192 Model account) \u0438\u043B\u0438 \u043E\u0440\u043A\u0435\u0441\u0442\u0440\u0430\u0442\u043E\u0440 \u043F\u0435\u0440\u0435\u0434\u0430\u043B \u0435\u0451 \u0441\u0443\u0431\u0430\u0433\u0435\u043D\u0442\u0443; \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0435 \u0432\u0445\u043E\u0434\u044B \u0430\u0433\u0435\u043D\u0442\u043E\u0432 \u043D\u0435 \u043C\u0435\u043D\u044F\u044E\u0442\u0441\u044F, \u0432 ~/.claude, ~/.codex \u0438 ~/.ollama \u043D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043F\u0438\u0448\u0435\u0442\u0441\u044F. \u0422\u0430\u0440\u0438\u0444\u044B GLM \u0438 MiniMax Coding Plan \u2014 \u0432 \u0440\u0430\u0437\u0434\u0435\u043B\u0435 \xAB\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043F\u043E\u0434\u043F\u0438\u0441\u043E\u043A\xBB.",
       none: "\u041F\u043E\u043A\u0430 \u043D\u0435\u0442 \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439.",
       add: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C",
       provider: "\u041F\u0440\u043E\u0432\u0430\u0439\u0434\u0435\u0440",
@@ -222,7 +335,15 @@
       poolHomeLimit: (limit) => `CanvasTTY \u0447\u0438\u0442\u0430\u0435\u0442 \u043A\u0432\u043E\u0442\u044B \u043D\u0435 \u0431\u043E\u043B\u0435\u0435 \u0447\u0435\u043C ${limit} \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439 \u043D\u0430 \u043F\u043B\u0430\u0433\u0438\u043D; \u0443 \u043E\u0441\u0442\u0430\u043B\u044C\u043D\u044B\u0445 \u043A\u0432\u043E\u0442\u0430 \xAB\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\xBB. \u0414\u043E\u0431\u0430\u0432\u043B\u044F\u0442\u044C \u0438 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C \u0438\u0445 \u043C\u043E\u0436\u043D\u043E.`,
       poolNoEvents: "CanvasTTY \u043D\u0435 \u043F\u0440\u0438\u0441\u044B\u043B\u0430\u0435\u0442 \u043F\u043B\u0430\u0433\u0438\u043D\u0443 \u0441\u043E\u0431\u044B\u0442\u0438\u044F \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u0440\u0430\u0432\u0438\u043B\u043E \xAB\u043E\u0434\u043D\u0430 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0430 \u043D\u0430 \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C\xBB \u043D\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442\u0441\u044F.",
       poolRemoveNote: "\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u0435 \u0441\u0442\u0438\u0440\u0430\u0435\u0442 \u043F\u0430\u043F\u043A\u0443 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438 \u0432\u043C\u0435\u0441\u0442\u0435 \u0441\u043E \u0432\u0445\u043E\u0434\u043E\u043C. Claude Code \u043D\u0430 macOS \u0445\u0440\u0430\u043D\u0438\u0442 \u0432\u0445\u043E\u0434 \u0432 \u0421\u0432\u044F\u0437\u043A\u0435 \u043A\u043B\u044E\u0447\u0435\u0439: \u0447\u0442\u043E\u0431\u044B \u0443\u0431\u0440\u0430\u0442\u044C \u0438 \u0435\u0433\u043E, \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u043D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /logout \u0432 \u043A\u0430\u0440\u0442\u043E\u0447\u043A\u0435 \u043D\u0430 \u044D\u0442\u043E\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438.",
-      notPooled: "\u041F\u0443\u043B\u044B \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B:"
+      notPooled: "\u041F\u0443\u043B\u044B \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B:",
+      plansLead: "\u0422\u0430\u0440\u0438\u0444\u044B \u0434\u043B\u044F \u043A\u043E\u0434\u0438\u043D\u0433\u0430 \u0432\u0445\u043E\u0434\u044F\u0442 \u043F\u043E API-\u043A\u043B\u044E\u0447\u0443: \u0432\u0441\u0442\u0430\u0432\u044C\u0442\u0435 \u043A\u043B\u044E\u0447 \u0442\u0430\u0440\u0438\u0444\u0430 \u043E\u0434\u0438\u043D \u0440\u0430\u0437. \u041E\u043D \u0445\u0440\u0430\u043D\u0438\u0442\u0441\u044F \u0432 \u0437\u0430\u0448\u0438\u0444\u0440\u043E\u0432\u0430\u043D\u043D\u044B\u0445 \u0441\u0435\u043A\u0440\u0435\u0442\u0430\u0445 \u043F\u043B\u0430\u0433\u0438\u043D\u0430, \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u0445\u043E\u0441\u0442 \u0441\u0430\u043C\u043E\u0433\u043E \u0442\u0430\u0440\u0438\u0444\u0430, \u0438 \u043D\u0430 \u043E\u0434\u043D\u043E\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438 \u043C\u043E\u0436\u043D\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A \u0441\u0440\u0430\u0437\u0443. \u0417\u0430\u043F\u0443\u0441\u043A Claude Code \u0438\u043B\u0438 OpenCode \u043D\u0430 \xAB\u043F\u0443\u043B\u0435 <\u0442\u0430\u0440\u0438\u0444\u0430>\xBB \u0431\u0435\u0440\u0451\u0442 \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C \u0441 \u043D\u0430\u0438\u0431\u043E\u043B\u044C\u0448\u0438\u043C \u043E\u0441\u0442\u0430\u0442\u043A\u043E\u043C \u043A\u0432\u043E\u0442\u044B.",
+      region: "\u0420\u0435\u0433\u0438\u043E\u043D",
+      concurrency: "\u041A\u0430\u0440\u0442\u043E\u0447\u0435\u043A \u043E\u0434\u043D\u043E\u0432\u0440\u0435\u043C\u0435\u043D\u043D\u043E",
+      forAuto: "\u0414\u043B\u044F Auto \u0438 \u0434\u0440\u0443\u0433\u0438\u0445 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u0439 (\u043A\u043B\u044E\u0447 \u043F\u043E\u0434\u0441\u0442\u0430\u0432\u043B\u044F\u0435\u0442 CanvasTTY, \u043E\u043D\u0438 \u0435\u0433\u043E \u043D\u0435 \u0432\u0438\u0434\u044F\u0442)",
+      planAdd: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0434\u043F\u0438\u0441\u043A\u0443",
+      planKeyFirst: "\u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u0432\u0441\u0442\u0430\u0432\u044C\u0442\u0435 API-\u043A\u043B\u044E\u0447 \u0442\u0430\u0440\u0438\u0444\u0430.",
+      planHost: (host2) => `\u043A\u043B\u044E\u0447 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 ${host2}`,
+      planRunning: (running, cap) => `\u0437\u0430\u043F\u0443\u0449\u0435\u043D\u043E \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A: ${running} \u0438\u0437 ${cap}`
     }
   };
   var KEY_PROBLEM = {
@@ -377,47 +498,7 @@
         if (accountKeyed(account)) await host.secrets.delete(secretKeyOf(account.id)).catch((error) => say(errorText(error)));
       })
     ));
-    if (accountKeyed(account)) {
-      const keyState = state.keys[account.id] ?? "missing";
-      const input = el("input", { type: "password", placeholder: t.key, autocomplete: "off", name: `key-${account.id}` });
-      item.append(el(
-        "div",
-        { className: "row" },
-        el("span", { className: "muted", textContent: keyState === "ok" ? t.keyOk : keyState === "other-address" ? t.keyOther : t.keyMissing }),
-        input,
-        button(t.saveKey, `save-key-${account.id}`, async () => {
-          const value = input.value.trim();
-          if (!value) return;
-          const problem = apiKeyProblem(value);
-          if (problem) {
-            input.value = "";
-            say(KEY_PROBLEM[locale][problem] ?? problem);
-            return;
-          }
-          let stored = false;
-          try {
-            await host.secrets.set(secretKeyOf(account.id), value);
-            stored = true;
-            input.value = "";
-            await host.service.request(SERVICE, "keyChanged", { accountId: account.id });
-            say(t.keySaved);
-          } catch (error) {
-            say(`${t.notSaved}${errorText(error)}`);
-          }
-          if (stored) await load();
-        }),
-        button(t.removeKey, `remove-key-${account.id}`, async () => {
-          try {
-            await host.secrets.delete(secretKeyOf(account.id));
-            await host.service.request(SERVICE, "keyChanged", { accountId: account.id });
-            say(t.keyRemoved);
-          } catch (error) {
-            say(errorText(error));
-          }
-          await load();
-        })
-      ));
-    }
+    if (accountKeyed(account)) item.append(keyRow(account));
     const quota = state.quota?.[account.id];
     if (quota) item.append(quotaRow(account, quota));
     const check = state.checks[account.id];
@@ -427,7 +508,7 @@
   function addForm() {
     const box = el("div", { className: "add" });
     const preset = el("select", { name: "preset" });
-    for (const entry of PRESETS) preset.append(el("option", { value: entry.id, textContent: entry.label }));
+    for (const entry of PRESETS) if (!PLAN_PRESETS.has(entry.id)) preset.append(el("option", { value: entry.id, textContent: entry.label }));
     const label = el("input", { name: "label", placeholder: t.name });
     const url = el("input", { name: "url", placeholder: "https://\u2026" });
     const model = el("input", { name: "model", placeholder: t.model });
@@ -537,7 +618,7 @@
     ));
     return item;
   }
-  function poolsSection(pools) {
+  function poolsSection(pools, plans) {
     const section = el("section", { className: "pools" }, el("h2", { textContent: t.pools }), el("p", { className: "muted", textContent: t.poolsLead }));
     if (pools.limits === "no") section.append(el("p", { className: "warn", textContent: t.poolLimitsNo }));
     if (pools.homeLimit.over) section.append(el("p", { className: "warn", textContent: t.poolHomeLimit(pools.homeLimit.limit) }));
@@ -570,17 +651,165 @@
       );
       section.append(block);
     }
+    if (plans) {
+      section.append(el("p", { className: "muted", textContent: t.plansLead }));
+      for (const entry of plans.providers) section.append(planBlock(entry));
+    }
     section.append(
       el("p", { className: "muted", textContent: t.poolRemoveNote }),
       el("p", { className: "muted", textContent: `${t.notPooled} ${Object.values(pools.notPooled).join(" ")}` })
     );
     return section;
   }
+  var PLAN_PRESETS = new Set(Object.values(PLAN_INFO).flatMap((info) => info.presets));
+  function keyRow(account) {
+    const keyState = state.keys[account.id] ?? "missing";
+    const input = el("input", { type: "password", placeholder: t.key, autocomplete: "off", name: `key-${account.id}` });
+    return el(
+      "div",
+      { className: "row" },
+      el("span", { className: "muted", textContent: keyState === "ok" ? t.keyOk : keyState === "other-address" ? t.keyOther : t.keyMissing }),
+      input,
+      button(t.saveKey, `save-key-${account.id}`, async () => {
+        const value = input.value.trim();
+        if (!value) return;
+        const problem = apiKeyProblem(value);
+        if (problem) {
+          input.value = "";
+          say(KEY_PROBLEM[locale][problem] ?? problem);
+          return;
+        }
+        let stored = false;
+        try {
+          await host.secrets.set(secretKeyOf(account.id), value);
+          stored = true;
+          input.value = "";
+          await host.service.request(SERVICE, "keyChanged", { accountId: account.id });
+          say(t.keySaved);
+        } catch (error) {
+          say(`${t.notSaved}${errorText(error)}`);
+        }
+        if (stored) await load();
+      }),
+      button(t.removeKey, `remove-key-${account.id}`, async () => {
+        try {
+          await host.secrets.delete(secretKeyOf(account.id));
+          await host.service.request(SERVICE, "keyChanged", { accountId: account.id });
+          say(t.keyRemoved);
+        } catch (error) {
+          say(errorText(error));
+        }
+        await load();
+      })
+    );
+  }
+  function planMember(account) {
+    const info = state.plans?.accounts[account.id];
+    const item = el("li", { className: "account", dataset: { plan: account.id } });
+    const regionLabel = info ? PLAN_INFO[info.provider].regions[info.region].label[locale] : "";
+    item.append(el(
+      "div",
+      { className: "row" },
+      el("strong", { textContent: account.label }),
+      el("span", { className: "muted", textContent: [regionLabel, account.model, info ? t.planHost(info.host) : null, info ? t.planRunning(info.running, info.concurrency) : null].filter(Boolean).join(" \xB7 ") })
+    ));
+    item.append(keyRow(account));
+    const quota = state.quota?.[account.id];
+    if (quota) item.append(quotaRow(account, quota));
+    item.append(el(
+      "div",
+      { className: "row" },
+      el("span", { className: "label", textContent: t.poolTrust }),
+      trustChoice(`plan-trust-${account.id}`, account.trust ?? "unset", (value) => {
+        void saveAccounts((accounts) => accounts.map((entry) => entry.id === account.id ? { ...entry, trust: value } : entry));
+      })
+    ));
+    const label = el("input", { value: account.label, name: `plan-label-${account.id}` });
+    const cap = el("input", { type: "number", min: "1", max: String(MAX_CONCURRENCY), value: String(account.concurrency ?? DEFAULT_CONCURRENCY), name: `plan-concurrency-${account.id}` });
+    const auto = el("input", { type: "checkbox", checked: account.brokerable === true, name: `plan-auto-${account.id}` });
+    item.append(
+      el("div", { className: "row" }, field(t.name, label), field(t.concurrency, cap)),
+      el("div", { className: "row" }, el("label", { className: "check" }, auto, ` ${t.forAuto}`)),
+      el(
+        "div",
+        { className: "row" },
+        button(t.saveChanges, `plan-save-${account.id}`, () => void saveAccounts((accounts) => accounts.map((entry) => entry.id !== account.id ? entry : {
+          ...entry,
+          label: label.value.trim(),
+          concurrency: Number(cap.value),
+          brokerable: auto.checked
+        }))),
+        button(t.remove, `plan-remove-${account.id}`, async () => {
+          if (!await saveAccounts((accounts) => accounts.filter((entry) => entry.id !== account.id))) return;
+          await host.secrets.delete(secretKeyOf(account.id)).catch((error) => say(errorText(error)));
+        })
+      )
+    );
+    return item;
+  }
+  function planBlock(entry) {
+    const members = state.settings.accounts.filter((account) => state.plans?.accounts[account.id]?.provider === entry.provider);
+    const block = el("div", { className: "add", dataset: { planProvider: entry.provider } });
+    block.append(el("div", { className: "row" }, el("strong", { textContent: entry.label }), el("span", { className: "muted", textContent: t.poolAccounts(members.length) })));
+    const list = el("ul", { className: "accounts" });
+    if (!members.length) list.append(el("li", { className: "muted", textContent: t.poolNone }));
+    for (const account of members) list.append(planMember(account));
+    block.append(list);
+    const label = el("input", { name: `plan-new-label-${entry.provider}`, placeholder: t.name });
+    const region = el("select", { name: `plan-new-region-${entry.provider}` });
+    for (const option of entry.regions) region.append(el("option", { value: option.region, textContent: option.label[locale] }));
+    const key = el("input", { type: "password", placeholder: t.key, autocomplete: "off", name: `plan-new-key-${entry.provider}` });
+    const cap = el("input", { type: "number", min: "1", max: String(MAX_CONCURRENCY), value: String(DEFAULT_CONCURRENCY), name: `plan-new-concurrency-${entry.provider}` });
+    const auto = el("input", { type: "checkbox", name: `plan-new-auto-${entry.provider}` });
+    let trust = null;
+    block.append(
+      el("div", { className: "row" }, field(t.name, label), field(t.region, region), field(t.key, key), field(t.concurrency, cap)),
+      el("div", { className: "row" }, el("span", { className: "label", textContent: t.poolTrust }), trustChoice(`plan-new-trust-${entry.provider}`, null, (value) => {
+        trust = value;
+      })),
+      el("div", { className: "row" }, el("label", { className: "check" }, auto, ` ${t.forAuto}`)),
+      el("div", { className: "row" }, button(t.planAdd, `plan-add-${entry.provider}`, async () => {
+        const value = key.value.trim();
+        if (!value) {
+          say(t.planKeyFirst);
+          return;
+        }
+        const problem = apiKeyProblem(value);
+        if (problem) {
+          key.value = "";
+          say(KEY_PROBLEM[locale][problem] ?? problem);
+          return;
+        }
+        if (!trust) {
+          say(t.poolChooseTrust);
+          return;
+        }
+        try {
+          const { id } = await host.service.request(SERVICE, "planAdd", {
+            provider: entry.provider,
+            region: region.value,
+            label: label.value.trim(),
+            trust,
+            concurrency: Number(cap.value),
+            brokerable: auto.checked
+          });
+          await host.secrets.set(secretKeyOf(id), value);
+          key.value = "";
+          await host.service.request(SERVICE, "keyChanged", { accountId: id });
+          say(t.keySaved);
+        } catch (error) {
+          say(`${t.notSaved}${errorText(error)}`);
+        }
+        await load().catch((error) => say(errorText(error)));
+      }))
+    );
+    return block;
+  }
   function render() {
     if (!state) return;
     const list = el("ul", { className: "accounts" });
-    if (!state.settings.accounts.length) list.append(el("li", { className: "muted", textContent: t.none }));
-    for (const account of state.settings.accounts) list.append(accountItem(account));
+    if (!state.settings.accounts.some((account) => !planOf(account))) list.append(el("li", { className: "muted", textContent: t.none }));
+    for (const account of state.settings.accounts) if (!planOf(account)) list.append(accountItem(account));
     root.replaceChildren(
       el("h1", { textContent: t.title }),
       el("p", { className: "muted", textContent: t.lead }),
@@ -588,7 +817,7 @@
       el("h2", { textContent: t.add }),
       addForm(),
       el("p", { className: "muted", textContent: t.keyWriteOnly }),
-      ...state.pools ? [poolsSection(state.pools)] : []
+      ...state.pools ? [poolsSection(state.pools, state.plans)] : []
     );
   }
   host.onContext(({ appearance }) => {

@@ -33,7 +33,7 @@ serve({
     resolveReady(started);
   },
   notifications: {
-    'canvastty.sessions.event': params => { void service().then(accounts => accounts.pools.sessionEvent(params)).catch(() => undefined); },
+    'canvastty.sessions.event': params => { void service().then(accounts => accounts.sessionEvent(params)).catch(() => undefined); },
     'canvastty.limits.changed': params => { void service().then(accounts => accounts.pools.limitsChanged(params)).catch(() => undefined); },
     // limit.exhausted: provider-wide for the default login (remembered and shown), or a named account of ours (rests).
     'canvastty.activity': params => { void service().then(accounts => accounts.activity(params)).catch(() => undefined); }
@@ -55,6 +55,7 @@ serve({
     check: async params => (await service()).check(params.accountId),
     keyChanged: async params => (await service()).keyChanged(params.accountId),
     quotaRead: async params => (await service()).readQuota(params.accountId),
+    planAdd: async params => (await service()).planAdd(params),
     poolAdd: async params => (await service()).poolAdd(params),
     poolSignIn: async params => (await service()).poolSignIn(params.accountId),
     poolUpdate: async params => (await service()).poolUpdate(params),

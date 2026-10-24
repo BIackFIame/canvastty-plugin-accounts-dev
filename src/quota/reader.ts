@@ -18,6 +18,7 @@ import {
   type QuotaEvent, type QuotaObservation, type QuotaRecord, type QuotaView
 } from './model.ts';
 import { limitObservation, parseZaiLimitError, parseZaiQuota, ZaiQuotaError, ZAI_QUOTA_HOSTS, ZAI_QUOTA_PATH } from './zai.ts';
+import { MINIMAX_QUOTA_HOSTS, MINIMAX_QUOTA_PATH, minimaxPayAsYouGoKey, parseMiniMaxLimitError, parseMiniMaxQuota } from './minimax.ts';
 
 export interface QuotaResponse { status: number; text(): Promise<string> }
 export type QuotaFetch = (url: string, init: { method: 'GET'; headers: Record<string, string>; signal: AbortSignal; redirect: 'error' }) => Promise<QuotaResponse>;
@@ -52,7 +53,18 @@ const hostOf = (url: string): string | null => { try { const parsed = new URL(ur
 export function quotaUrlOf(account: Pick<Account, 'baseUrl' | 'preset'>): string | null {
   if (!accountKeyed(account as Account) || decisionsOnlyAccount(account)) return null;
   const host = hostOf(account.baseUrl);
-  return host && ZAI_QUOTA_HOSTS.includes(host) ? `https://${host}${ZAI_QUOTA_PATH}` : null;
+  if (!host) return null;
+  if (ZAI_QUOTA_HOSTS.includes(host)) return `https://${host}${ZAI_QUOTA_PATH}`;
+  if (MINIMAX_QUOTA_HOSTS.includes(host)) return `https://${host}${MINIMAX_QUOTA_PATH}`;
+  return null;
+}
+
+const isMiniMax = (url: string): boolean => { try { return MINIMAX_QUOTA_HOSTS.includes(new URL(url).host); } catch { return false; } };
+
+/** A MiniMax limit error names no reset: the last read's text window that resets next, if any, is when it ends. */
+function miniMaxLimit(record: QuotaRecord, code: string, now: number): QuotaObservation {
+  const resets = record.windows.filter(window => window.models && window.resetsAt !== null && window.resetsAt > now).map(window => window.resetsAt!);
+  return { source: 'minimax-limit-error', at: now, windows: [], exhausted: { until: resets.length ? Math.min(...resets) : null, code } };
 }
 
 /** The record key of an account this plugin cannot read (only limits it is told about). */
@@ -153,9 +165,16 @@ export class QuotaReader {
     this.apply(account.id, observe(this.record(account, url), observation, this.now()));
   }
 
-  /** A limit error text or body for an account (Z.AI codes); true when it was one. */
+  /** A limit error text or body for an account (Z.AI codes, MiniMax's usage-limit answers); true when it was one. */
   noteError(account: Account, body: unknown): boolean {
     const now = this.now();
+    const url = quotaUrlOf(account);
+    if (url && isMiniMax(url)) {
+      const found = parseMiniMaxLimitError(body);
+      if (!found) return false;
+      this.noteLimit(account, miniMaxLimit(this.record(account, url), found.code, now));
+      return true;
+    }
     const limit = parseZaiLimitError(body, now);
     if (!limit) return false;
     this.noteLimit(account, limitObservation(limit, now));
@@ -234,6 +253,13 @@ export class QuotaReader {
     let key: string | null = null;
     try { key = await this.options.key(account); } catch { key = null; }
     if (!key) { this.set(account.id, readFailed(this.record(account, url), 'no key saved for this address', started)); return; }
+    const minimax = isMiniMax(url);
+    if (minimax && minimaxPayAsYouGoKey(key)) {
+      // A pay-as-you-go key reads a balance, not a plan: nothing is sent, the quota stays unknown (never "used up").
+      this.set(account.id, { ...readFailed(this.record(account, url), 'a pay-as-you-go key (sk-api-…) has no plan quota to read', started), failures: 0 });
+      this.due.set(account.id, started + 3_600_000);
+      return;
+    }
     const scrub = (text: string): string => key ? text.split(key).join('[key]') : text;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_MS);
@@ -245,6 +271,21 @@ export class QuotaReader {
       const body = (await response.text()).slice(0, MAX_BODY);
       const now = this.now();
       if (response.status === 401 || response.status === 403) throw new ZaiQuotaError(`the provider refused the key (${response.status})`, 'auth');
+      if (minimax) {
+        if (response.status === 429 || response.status >= 400) {
+          const found = parseMiniMaxLimitError(body);
+          if (found) { this.apply(account.id, observe(this.record(account, url), miniMaxLimit(this.record(account, url), found.code, now), now)); return; }
+          throw new ZaiQuotaError(`the quota endpoint answered HTTP ${response.status}`, 'refused');
+        }
+        let parsed: unknown;
+        try { parsed = JSON.parse(body); } catch { throw new ZaiQuotaError('the quota answer is not JSON'); }
+        const refusedForLimit = parseMiniMaxLimitError(parsed);
+        if (refusedForLimit) { this.apply(account.id, observe(this.record(account, url), miniMaxLimit(this.record(account, url), refusedForLimit.code, now), now)); return; }
+        const result = observe(this.record(account, url), parseMiniMaxQuota(parsed, now), now);
+        result.record.lastAttemptAt = now;
+        this.apply(account.id, result);
+        return;
+      }
       if (response.status === 429 || response.status >= 400) {
         const limit = parseZaiLimitError(body, now);
         if (limit) { this.apply(account.id, observe(this.record(account, url), limitObservation(limit, now), now)); return; }

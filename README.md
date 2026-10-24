@@ -75,6 +75,23 @@ cannot have a pool (no variable moves its home; its free OAuth tier closed), nor
 a model account). Removing an account deletes its folder with the sign-in; Claude Code on macOS keeps its sign-in in the
 Keychain, so type `/logout` in a card on that account first if you want that removed too.
 
+### Coding plans (GLM, MiniMax)
+
+GLM Coding Plan (Z.AI `api.z.ai` or BigModel `open.bigmodel.cn`) and MiniMax Coding Plan (`api.minimax.io` or
+`api.minimax.cn`) sign in with an API key, not a browser. **Add subscription** under the plan in *Subscription accounts*
+asks for a name, the region, the key, the data level (nothing is chosen for you), how many cards may run on the account
+at once (default 2) and whether Auto and other extensions may use it. The key goes into the plugin's secrets, bound to
+the plan's host: it is sent nowhere else. Several accounts of one plan form its pool.
+
+*Model account → GLM Coding Plan pool* (`pool:glm`, or `pool:minimax`) runs Claude Code or OpenCode on the account with
+the most quota left, skipping accounts without a key, used up (until their reset) or at their card limit. Both agents
+use the plan's Anthropic-compatible endpoint (`/api/anthropic` on Z.AI and BigModel, `/anthropic` on MiniMax); Claude
+Code gets the plan's model (GLM-5.3, MiniMax-M3.1-Flash) for its main slots and the small one (GLM-5.3-Flash) for Haiku,
+OpenCode only the plan's provider with every native agent pinned to it. GLM quota is read from
+`/api/monitor/usage/quota/limit`, MiniMax quota from `/v1/token_plan/remains` (5 h and weekly windows; a pay-as-you-go
+`sk-api-` key has no plan quota and stays unknown). Accounts you saved earlier with a Z.AI or MiniMax preset appear here
+with their keys. `list_routes`, `pick_account` and the shared reads list them as `kind: "subscription"` with `plan`.
+
 ## What it does to a launch
 
 - Claude Code: `ANTHROPIC_BASE_URL` (Ollama gets its server root), `ANTHROPIC_AUTH_TOKEN` (the key, or `ollama` for a

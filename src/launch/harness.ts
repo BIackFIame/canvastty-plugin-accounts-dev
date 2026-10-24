@@ -43,6 +43,8 @@ export interface HarnessInput {
   baseUrl: string;
   /** The name the endpoint receives (for local Ollama already `name:local`). */
   model: string;
+  /** A coding plan's smaller model (Claude Code's Haiku slot; OpenCode's titles and summaries). */
+  smallModel?: string;
   /** The plugin secret holding the key; undefined for a keyless Ollama server. */
   secretKey?: string;
   /** Kimi with a key only: the value itself (its config file is the only place Kimi reads a key from here). */
@@ -116,7 +118,7 @@ function claudePlan(input: HarnessInput, context: number | null): Contribution {
     ANTHROPIC_MODEL: input.model,
     ANTHROPIC_DEFAULT_OPUS_MODEL: input.model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: input.model,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: input.model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: input.smallModel ?? input.model,
     CLAUDE_CODE_SUBAGENT_MODEL: input.model,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     DISABLE_ERROR_REPORTING: '1',
@@ -203,7 +205,7 @@ function codexPlan(input: HarnessInput, context: number | null): Contribution {
  * there too, so an `agent.<name>.model` in the global config can neither send its calls elsewhere nor make them fail.
  */
 function openCodePlan(input: HarnessInput, context: number | null): Contribution {
-  if (APPROVAL_CONFIG_KEY.test(input.model) || APPROVAL_CONFIG_KEY.test(input.providerId)) {
+  if (APPROVAL_CONFIG_KEY.test(input.model) || APPROVAL_CONFIG_KEY.test(input.providerId) || (input.smallModel !== undefined && APPROVAL_CONFIG_KEY.test(input.smallModel))) {
     throw new Error(`OpenCode cannot run the model ${input.model.slice(0, 60)} from an account: its name would be a key CanvasTTY reserves for approval settings.`);
   }
   const npm = input.protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible';
@@ -211,16 +213,19 @@ function openCodePlan(input: HarnessInput, context: number | null): Contribution
   const provider = {
     npm, name: 'CanvasTTY',
     options: { baseURL, ...(input.secretKey !== undefined ? { apiKey: `{env:${MODEL_KEY_ENV}}` } : {}) },
-    models: { [input.model]: { name: input.model, ...(context ? { limit: { context, output: Math.min(32_768, Math.floor(context / 4)) } } : {}) } }
+    models: Object.fromEntries([input.model, ...(input.smallModel && input.smallModel !== input.model ? [input.smallModel] : [])]
+      .map(name => [name, { name, ...(context ? { limit: { context, output: Math.min(32_768, Math.floor(context / 4)) } } : {}) }]))
   };
   const model = `${input.providerId}/${input.model}`;
+  const small = input.smallModel ? `${input.providerId}/${input.smallModel}` : model;
+  const smallAgents = new Set(['title', 'summary']);
   return {
     env: { OPENCODE_CONFIG: `${LAUNCH_FILES}/opencode.json` },
     secretEnv: input.secretKey !== undefined ? { [MODEL_KEY_ENV]: input.secretKey } : {},
     args: ['--model', model],
     files: [{ relPath: 'opencode.json', content: JSON.stringify({
-      $schema: 'https://opencode.ai/config.json', enabled_providers: [input.providerId], provider: { [input.providerId]: provider }, model, small_model: model,
-      agent: Object.fromEntries(OPENCODE_NATIVE_AGENTS.map(name => [name, { model }]))
+      $schema: 'https://opencode.ai/config.json', enabled_providers: [input.providerId], provider: { [input.providerId]: provider }, model, small_model: small,
+      agent: Object.fromEntries(OPENCODE_NATIVE_AGENTS.map(name => [name, { model: smallAgents.has(name) ? small : model }]))
     }) }]
   };
 }

@@ -6,6 +6,8 @@
  * "Model account", or an orchestrator's spawn_agent launchOptions).
  */
 import { parseOllamaModelRef, validOllamaModelName } from './ollamaModelRef.ts';
+import { MAX_CONCURRENCY, planOf } from '../plans/plans.ts';
+import { DATA_CLASSES, type PoolTrust } from '../pools/model.ts';
 
 /** The agent CLIs an account can drive, each through per-run environment, flags and files CanvasTTY owns. */
 export const HARNESSES = ['claude', 'codex', 'opencode', 'qwen', 'kimi'] as const;
@@ -81,6 +83,14 @@ export interface Account {
    * extension in CanvasTTY's settings). Off unless the person ticks it; only API accounts with a key, never OpenRouter.
    */
   brokerable?: boolean;
+  /**
+   * Coding-plan accounts only (GLM, MiniMax: an API account on the plan's own host, plans/plans.ts): the data level the
+   * person trusts the account with (`unset` until they choose; never filled in for them), how many cards may run on it
+   * at once (default 2), and the plan's smaller model for titles, summaries and Claude Code's Haiku slot.
+   */
+  trust?: PoolTrust;
+  concurrency?: number;
+  smallModel?: string;
 }
 
 export interface AccountsSettings { version: 1; accounts: Account[] }
@@ -166,7 +176,7 @@ const plainText = (value: unknown, max: number): value is string => typeof value
 export function validateAccount(value: unknown): Account {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('An account must be an object.');
   const raw = value as Record<string, unknown>;
-  const unknown = Object.keys(raw).find(key => !['id', 'label', 'preset', 'baseUrl', 'model', 'responsesApi', 'agents', 'brokerable'].includes(key));
+  const unknown = Object.keys(raw).find(key => !['id', 'label', 'preset', 'baseUrl', 'model', 'responsesApi', 'agents', 'brokerable', 'trust', 'concurrency', 'smallModel'].includes(key));
   if (unknown) throw new Error(`Unknown account field ${unknown.slice(0, 40)}.`);
   if (typeof raw.id !== 'string' || !ID.test(raw.id)) throw new Error('Account id must be 1–40 lowercase letters, digits or dashes.');
   if (!plainText(raw.label, 80)) throw new Error('Give the account a name (at most 80 characters).');
@@ -211,7 +221,22 @@ export function validateAccount(value: unknown): Account {
   if (brokerable && !brokerableShape({ preset: preset.id, baseUrl })) {
     throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : 'Only an https API account with a key can be used by other extensions.');
   }
-  return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...(responsesApi ? { responsesApi } : {}), agents, ...(brokerable ? { brokerable } : {}) };
+  const plan = planOf({ preset: preset.id, baseUrl });
+  if (!plan && (raw.trust !== undefined || raw.concurrency !== undefined || raw.smallModel !== undefined)) throw new Error('Only a coding-plan account (GLM, MiniMax) has a data level, a card limit or a small model.');
+  if (raw.trust !== undefined && raw.trust !== 'unset' && !(DATA_CLASSES as readonly unknown[]).includes(raw.trust)) throw new Error('Choose how far you trust the account: not set, D0, D1, D2 or D3.');
+  if (raw.concurrency !== undefined && !(typeof raw.concurrency === 'number' && Number.isInteger(raw.concurrency) && raw.concurrency >= 1 && raw.concurrency <= MAX_CONCURRENCY)) {
+    throw new Error(`Cards at once must be a whole number from 1 to ${MAX_CONCURRENCY}.`);
+  }
+  let smallModel: string | undefined;
+  if (raw.smallModel !== undefined && raw.smallModel !== '') {
+    if (typeof raw.smallModel !== 'string' || !plainText(raw.smallModel.trim(), 200) || /\s/u.test(raw.smallModel.trim()) || raw.smallModel.trim().startsWith('-')) throw new Error('The small model name is invalid.');
+    smallModel = raw.smallModel.trim();
+  }
+  return {
+    id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...(responsesApi ? { responsesApi } : {}), agents, ...(brokerable ? { brokerable } : {}),
+    ...(plan && raw.trust !== undefined ? { trust: raw.trust as PoolTrust } : {}), ...(plan && raw.concurrency !== undefined ? { concurrency: raw.concurrency as number } : {}),
+    ...(smallModel && smallModel !== model ? { smallModel } : {})
+  };
 }
 
 /** Accounts that may be offered for brokered requests at all: an https API (not Ollama) account with a key, not OpenRouter. */
@@ -250,7 +275,7 @@ export function brokerOfferOf(account: Account, flatRate: boolean): BrokerOffer 
     protocol,
     baseUrl: protocol === 'anthropic' ? `${account.baseUrl}/v1` : account.baseUrl,
     paths: protocol === 'anthropic' ? ['/messages'] : ['/chat/completions', ...(account.responsesApi ? ['/responses'] : []), '/models'],
-    models: [account.model],
+    models: [account.model, ...(account.smallModel ? [account.smallModel] : [])],
     secretKey: secretKeyOf(account.id),
     auth: 'bearer',
     flatRate

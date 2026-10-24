@@ -7,7 +7,8 @@ import {
   HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, brokerableShape, harnessSupport, newAccountId, secretKeyOf,
   type Account, type AccountsSettings, type Harness, type PresetId
 } from '../shared/accounts.ts';
-import type { CheckResult } from '../service/accounts.ts';
+import type { CheckResult, PlansView } from '../service/accounts.ts';
+import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, PLAN_INFO, planOf, type PlanProvider, type PlanRegion } from '../plans/plans.ts';
 import type { PoolsView, PoolMemberView } from '../pools/service.ts';
 import { quotaShareText } from '../shared/quotaText.ts';
 
@@ -22,6 +23,7 @@ interface State {
   checks: Record<string, CheckResult | { error: string }>;
   quota?: Record<string, QuotaLine>;
   pools?: PoolsView;
+  plans?: PlansView;
 }
 interface QuotaLine {
   state: 'ok' | 'low' | 'exhausted' | 'presumed-reset' | 'unknown' | 'stale';
@@ -35,7 +37,7 @@ const SERVICE = 'accounts';
 const STRINGS = {
   en: {
     title: 'Model accounts',
-    lead: 'Run Claude Code, Codex, OpenCode, Qwen Code or Kimi on another model: a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API. An account is used only when you choose it in the launcher (Advanced → Use CanvasTTY Accounts → Model account) or an orchestrator passes it to a subagent; the agents\' own sign-ins stay untouched, and nothing is written to ~/.claude, ~/.codex or ~/.ollama.',
+    lead: 'Run Claude Code, Codex, OpenCode, Qwen Code or Kimi on another model: a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API. An account is used only when you choose it in the launcher (Advanced → Use CanvasTTY Accounts → Model account) or an orchestrator passes it to a subagent; the agents\' own sign-ins stay untouched, and nothing is written to ~/.claude, ~/.codex or ~/.ollama. GLM and MiniMax Coding Plans are under Subscription accounts.',
     none: 'No accounts yet.', add: 'Add account', provider: 'Provider', name: 'Name', address: 'Address', model: 'Model',
     responses: 'The endpoint has the OpenAI Responses API (needed for Codex)', agents: 'Agents',
     brokerable: 'Other extensions may send model requests through this account (CanvasTTY adds the key; they never see it). Allow each extension under Settings → Agents → Extension native code → Accounts. Check that the plan\'s terms allow it.',
@@ -67,11 +69,15 @@ const STRINGS = {
     poolHomeLimit: (limit: number) => `CanvasTTY reads quotas for at most ${limit} accounts per plugin; the others stay "unknown". You can still add and use them.`,
     poolNoEvents: 'CanvasTTY sends this plugin no card events, so "one card per account" cannot be checked.',
     poolRemoveNote: 'Removing deletes the account\'s folder with its sign-in. Claude Code on macOS keeps its sign-in in the Keychain: type /logout in a card on the account first if you want that gone too.',
-    notPooled: 'Not available as pools:'
+    notPooled: 'Not available as pools:',
+    plansLead: 'Coding plans sign in with an API key: paste the plan\'s key once. It is stored in CanvasTTY\'s encrypted plugin secrets, sent only to the plan\'s own host, and several cards may run on one account at once. Launch Claude Code or OpenCode on "<plan> pool" to get the account with the most quota left.',
+    region: 'Region', concurrency: 'Cards at once', forAuto: 'For Auto and other extensions (CanvasTTY adds the key; they never see it)',
+    planAdd: 'Add subscription', planKeyFirst: 'Paste the plan\'s API key first.', planHost: (host: string) => `key sent only to ${host}`,
+    planRunning: (running: number, cap: number) => `${running} of ${cap} cards running`
   },
   ru: {
     title: 'Учётные записи моделей',
-    lead: 'Запускайте Claude Code, Codex, OpenCode, Qwen Code или Kimi на другой модели: локальной в Ollama, в Ollama Cloud, Z.AI, MiniMax, OpenRouter или любом совместимом API. Учётная запись используется, только когда вы выбрали её в окне запуска (Дополнительно → Use CanvasTTY Accounts → Model account) или оркестратор передал её субагенту; собственные входы агентов не меняются, в ~/.claude, ~/.codex и ~/.ollama ничего не пишется.',
+    lead: 'Запускайте Claude Code, Codex, OpenCode, Qwen Code или Kimi на другой модели: локальной в Ollama, в Ollama Cloud, Z.AI, MiniMax, OpenRouter или любом совместимом API. Учётная запись используется, только когда вы выбрали её в окне запуска (Дополнительно → Use CanvasTTY Accounts → Model account) или оркестратор передал её субагенту; собственные входы агентов не меняются, в ~/.claude, ~/.codex и ~/.ollama ничего не пишется. Тарифы GLM и MiniMax Coding Plan — в разделе «Учётные записи подписок».',
     none: 'Пока нет учётных записей.', add: 'Добавить', provider: 'Провайдер', name: 'Название', address: 'Адрес', model: 'Модель',
     responses: 'У адреса есть OpenAI Responses API (нужен для Codex)', agents: 'Агенты',
     brokerable: 'Другие расширения могут отправлять запросы к модели через эту учётную запись (ключ подставляет CanvasTTY, они его не видят). Каждое расширение разрешается в Настройки → Агенты → Нативный код расширений → Accounts. Проверьте, что условия тарифа это допускают.',
@@ -103,7 +109,11 @@ const STRINGS = {
     poolHomeLimit: (limit: number) => `CanvasTTY читает квоты не более чем ${limit} учётных записей на плагин; у остальных квота «неизвестна». Добавлять и использовать их можно.`,
     poolNoEvents: 'CanvasTTY не присылает плагину события карточек, поэтому правило «одна карточка на учётную запись» не проверяется.',
     poolRemoveNote: 'Удаление стирает папку учётной записи вместе со входом. Claude Code на macOS хранит вход в Связке ключей: чтобы убрать и его, сначала наберите /logout в карточке на этой учётной записи.',
-    notPooled: 'Пулы недоступны:'
+    notPooled: 'Пулы недоступны:',
+    plansLead: 'Тарифы для кодинга входят по API-ключу: вставьте ключ тарифа один раз. Он хранится в зашифрованных секретах плагина, отправляется только на хост самого тарифа, и на одной учётной записи можно запускать несколько карточек сразу. Запуск Claude Code или OpenCode на «пуле <тарифа>» берёт учётную запись с наибольшим остатком квоты.',
+    region: 'Регион', concurrency: 'Карточек одновременно', forAuto: 'Для Auto и других расширений (ключ подставляет CanvasTTY, они его не видят)',
+    planAdd: 'Добавить подписку', planKeyFirst: 'Сначала вставьте API-ключ тарифа.', planHost: (host: string) => `ключ отправляется только на ${host}`,
+    planRunning: (running: number, cap: number) => `запущено карточек: ${running} из ${cap}`
   }
 };
 const KEY_PROBLEM: Record<'en' | 'ru', Record<string, string>> = {
@@ -244,36 +254,7 @@ function accountItem(account: Account): HTMLLIElement {
       if (!await saveAccounts(accounts => accounts.filter(entry => entry.id !== account.id))) return;
       if (accountKeyed(account)) await host.secrets.delete(secretKeyOf(account.id)).catch(error => say(errorText(error)));
     })));
-  if (accountKeyed(account)) {
-    const keyState = state!.keys[account.id] ?? 'missing';
-    const input = el('input', { type: 'password', placeholder: t.key, autocomplete: 'off', name: `key-${account.id}` });
-    item.append(el('div', { className: 'row' },
-      el('span', { className: 'muted', textContent: keyState === 'ok' ? t.keyOk : keyState === 'other-address' ? t.keyOther : t.keyMissing }),
-      input,
-      button(t.saveKey, `save-key-${account.id}`, async () => {
-        const value = input.value.trim();
-        if (!value) return;
-        const problem = apiKeyProblem(value);
-        if (problem) { input.value = ''; say(KEY_PROBLEM[locale][problem] ?? problem); return; }
-        // The field is cleared only once the key is stored: a failed write keeps what the person pasted.
-        let stored = false;
-        try {
-          await host.secrets.set(secretKeyOf(account.id), value);
-          stored = true; input.value = '';
-          await host.service.request(SERVICE, 'keyChanged', { accountId: account.id });
-          say(t.keySaved);
-        } catch (error) { say(`${t.notSaved}${errorText(error)}`); }
-        if (stored) await load();
-      }),
-      button(t.removeKey, `remove-key-${account.id}`, async () => {
-        try {
-          await host.secrets.delete(secretKeyOf(account.id));
-          await host.service.request(SERVICE, 'keyChanged', { accountId: account.id });
-          say(t.keyRemoved);
-        } catch (error) { say(errorText(error)); }
-        await load();
-      })));
-  }
+  if (accountKeyed(account)) item.append(keyRow(account));
   const quota = state!.quota?.[account.id];
   if (quota) item.append(quotaRow(account, quota));
   const check = state!.checks[account.id];
@@ -284,7 +265,8 @@ function accountItem(account: Account): HTMLLIElement {
 function addForm(): HTMLElement {
   const box = el('div', { className: 'add' });
   const preset = el('select', { name: 'preset' });
-  for (const entry of PRESETS) preset.append(el('option', { value: entry.id, textContent: entry.label }));
+  // GLM and MiniMax are coding plans: they are added under Subscription accounts.
+  for (const entry of PRESETS) if (!PLAN_PRESETS.has(entry.id)) preset.append(el('option', { value: entry.id, textContent: entry.label }));
   const label = el('input', { name: 'label', placeholder: t.name });
   const url = el('input', { name: 'url', placeholder: 'https://…' });
   const model = el('input', { name: 'model', placeholder: t.model });
@@ -368,7 +350,7 @@ function poolMember(member: PoolMemberView): HTMLLIElement {
   return item;
 }
 
-function poolsSection(pools: PoolsView): HTMLElement {
+function poolsSection(pools: PoolsView, plans?: PlansView): HTMLElement {
   const section = el('section', { className: 'pools' }, el('h2', { textContent: t.pools }), el('p', { className: 'muted', textContent: t.poolsLead }));
   if (pools.limits === 'no') section.append(el('p', { className: 'warn', textContent: t.poolLimitsNo }));
   if (pools.homeLimit.over) section.append(el('p', { className: 'warn', textContent: t.poolHomeLimit(pools.homeLimit.limit) }));
@@ -394,16 +376,123 @@ function poolsSection(pools: PoolsView): HTMLElement {
       }), el('span', { className: 'muted', textContent: entry.signInHint[locale] })));
     section.append(block);
   }
+  if (plans) {
+    section.append(el('p', { className: 'muted', textContent: t.plansLead }));
+    for (const entry of plans.providers) section.append(planBlock(entry));
+  }
   section.append(el('p', { className: 'muted', textContent: t.poolRemoveNote }),
     el('p', { className: 'muted', textContent: `${t.notPooled} ${Object.values(pools.notPooled).join(' ')}` }));
   return section;
 }
 
+// ---- coding plans (GLM, MiniMax): API-key subscriptions ----
+
+const PLAN_PRESETS = new Set<string>(Object.values(PLAN_INFO).flatMap(info => info.presets));
+
+/** The key row of a keyed account: write-only, checked locally, bound to the account's host by the service. */
+function keyRow(account: Account): HTMLElement {
+  const keyState = state!.keys[account.id] ?? 'missing';
+  const input = el('input', { type: 'password', placeholder: t.key, autocomplete: 'off', name: `key-${account.id}` });
+  return el('div', { className: 'row' },
+    el('span', { className: 'muted', textContent: keyState === 'ok' ? t.keyOk : keyState === 'other-address' ? t.keyOther : t.keyMissing }),
+    input,
+    button(t.saveKey, `save-key-${account.id}`, async () => {
+      const value = input.value.trim();
+      if (!value) return;
+      const problem = apiKeyProblem(value);
+      if (problem) { input.value = ''; say(KEY_PROBLEM[locale][problem] ?? problem); return; }
+      let stored = false;
+      try {
+        await host.secrets.set(secretKeyOf(account.id), value);
+        stored = true; input.value = '';
+        await host.service.request(SERVICE, 'keyChanged', { accountId: account.id });
+        say(t.keySaved);
+      } catch (error) { say(`${t.notSaved}${errorText(error)}`); }
+      if (stored) await load();
+    }),
+    button(t.removeKey, `remove-key-${account.id}`, async () => {
+      try {
+        await host.secrets.delete(secretKeyOf(account.id));
+        await host.service.request(SERVICE, 'keyChanged', { accountId: account.id });
+        say(t.keyRemoved);
+      } catch (error) { say(errorText(error)); }
+      await load();
+    }));
+}
+
+function planMember(account: Account): HTMLLIElement {
+  const info = state!.plans?.accounts[account.id];
+  const item = el('li', { className: 'account', dataset: { plan: account.id } });
+  const regionLabel = info ? PLAN_INFO[info.provider].regions[info.region].label[locale] : '';
+  item.append(el('div', { className: 'row' }, el('strong', { textContent: account.label }),
+    el('span', { className: 'muted', textContent: [regionLabel, account.model, info ? t.planHost(info.host) : null, info ? t.planRunning(info.running, info.concurrency) : null].filter(Boolean).join(' · ') })));
+  item.append(keyRow(account));
+  const quota = state!.quota?.[account.id];
+  if (quota) item.append(quotaRow(account, quota));
+  item.append(el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }),
+    trustChoice(`plan-trust-${account.id}`, account.trust ?? 'unset', value => {
+      void saveAccounts(accounts => accounts.map(entry => entry.id === account.id ? { ...entry, trust: value as Account['trust'] } : entry));
+    })));
+  const label = el('input', { value: account.label, name: `plan-label-${account.id}` });
+  const cap = el('input', { type: 'number', min: '1', max: String(MAX_CONCURRENCY), value: String(account.concurrency ?? DEFAULT_CONCURRENCY), name: `plan-concurrency-${account.id}` });
+  const auto = el('input', { type: 'checkbox', checked: account.brokerable === true, name: `plan-auto-${account.id}` });
+  item.append(el('div', { className: 'row' }, field(t.name, label), field(t.concurrency, cap)),
+    el('div', { className: 'row' }, el('label', { className: 'check' }, auto, ` ${t.forAuto}`)),
+    el('div', { className: 'row' },
+      button(t.saveChanges, `plan-save-${account.id}`, () => void saveAccounts(accounts => accounts.map(entry => entry.id !== account.id ? entry : {
+        ...entry, label: label.value.trim(), concurrency: Number(cap.value), brokerable: auto.checked
+      }))),
+      button(t.remove, `plan-remove-${account.id}`, async () => {
+        if (!await saveAccounts(accounts => accounts.filter(entry => entry.id !== account.id))) return;
+        await host.secrets.delete(secretKeyOf(account.id)).catch(error => say(errorText(error)));
+      })));
+  return item;
+}
+
+function planBlock(entry: PlansView['providers'][number]): HTMLElement {
+  const members = state!.settings.accounts.filter(account => state!.plans?.accounts[account.id]?.provider === entry.provider);
+  const block = el('div', { className: 'add', dataset: { planProvider: entry.provider } });
+  block.append(el('div', { className: 'row' }, el('strong', { textContent: entry.label }), el('span', { className: 'muted', textContent: t.poolAccounts(members.length) })));
+  const list = el('ul', { className: 'accounts' });
+  if (!members.length) list.append(el('li', { className: 'muted', textContent: t.poolNone }));
+  for (const account of members) list.append(planMember(account));
+  block.append(list);
+  const label = el('input', { name: `plan-new-label-${entry.provider}`, placeholder: t.name });
+  const region = el('select', { name: `plan-new-region-${entry.provider}` });
+  for (const option of entry.regions) region.append(el('option', { value: option.region, textContent: option.label[locale] }));
+  const key = el('input', { type: 'password', placeholder: t.key, autocomplete: 'off', name: `plan-new-key-${entry.provider}` });
+  const cap = el('input', { type: 'number', min: '1', max: String(MAX_CONCURRENCY), value: String(DEFAULT_CONCURRENCY), name: `plan-new-concurrency-${entry.provider}` });
+  const auto = el('input', { type: 'checkbox', name: `plan-new-auto-${entry.provider}` });
+  let trust: string | null = null;
+  block.append(
+    el('div', { className: 'row' }, field(t.name, label), field(t.region, region), field(t.key, key), field(t.concurrency, cap)),
+    el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }), trustChoice(`plan-new-trust-${entry.provider}`, null, value => { trust = value; })),
+    el('div', { className: 'row' }, el('label', { className: 'check' }, auto, ` ${t.forAuto}`)),
+    el('div', { className: 'row' }, button(t.planAdd, `plan-add-${entry.provider}`, async () => {
+      const value = key.value.trim();
+      if (!value) { say(t.planKeyFirst); return; }
+      const problem = apiKeyProblem(value);
+      if (problem) { key.value = ''; say(KEY_PROBLEM[locale][problem] ?? problem); return; }
+      if (!trust) { say(t.poolChooseTrust); return; }
+      try {
+        const { id } = await host.service.request(SERVICE, 'planAdd', {
+          provider: entry.provider as PlanProvider, region: region.value as PlanRegion, label: label.value.trim(), trust, concurrency: Number(cap.value), brokerable: auto.checked
+        }) as { id: string };
+        await host.secrets.set(secretKeyOf(id), value);
+        key.value = '';
+        await host.service.request(SERVICE, 'keyChanged', { accountId: id });
+        say(t.keySaved);
+      } catch (error) { say(`${t.notSaved}${errorText(error)}`); }
+      await load().catch(error => say(errorText(error)));
+    })));
+  return block;
+}
+
 function render(): void {
   if (!state) return;
   const list = el('ul', { className: 'accounts' });
-  if (!state.settings.accounts.length) list.append(el('li', { className: 'muted', textContent: t.none }));
-  for (const account of state.settings.accounts) list.append(accountItem(account));
+  if (!state.settings.accounts.some(account => !planOf(account))) list.append(el('li', { className: 'muted', textContent: t.none }));
+  for (const account of state.settings.accounts) if (!planOf(account)) list.append(accountItem(account));
   root.replaceChildren(
     el('h1', { textContent: t.title }),
     el('p', { className: 'muted', textContent: t.lead }),
@@ -411,7 +500,7 @@ function render(): void {
     el('h2', { textContent: t.add }),
     addForm(),
     el('p', { className: 'muted', textContent: t.keyWriteOnly }),
-    ...(state.pools ? [poolsSection(state.pools)] : [])
+    ...(state.pools ? [poolsSection(state.pools, state.plans)] : [])
   );
 }
 

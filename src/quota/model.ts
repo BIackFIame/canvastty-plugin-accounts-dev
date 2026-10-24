@@ -10,7 +10,7 @@
  */
 
 /** `core-limits`: CanvasTTY's own limits read of a subscription account home (pools). */
-export type QuotaSource = 'zai-quota-api' | 'zai-limit-error' | 'host-activity' | 'core-limits';
+export type QuotaSource = 'zai-quota-api' | 'zai-limit-error' | 'minimax-quota-api' | 'minimax-limit-error' | 'host-activity' | 'core-limits';
 
 export interface QuotaWindow {
   /** Stable per window kind, for example `zai:tokens:300`. */
@@ -320,7 +320,7 @@ export function nextReadAt({ record, now, random }: ScheduleInput): number {
 
 const num = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const text = (value: unknown, max: number): string | null => typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
-const SOURCES: readonly QuotaSource[] = ['zai-quota-api', 'zai-limit-error', 'host-activity', 'core-limits'];
+const SOURCES: readonly QuotaSource[] = ['zai-quota-api', 'zai-limit-error', 'minimax-quota-api', 'minimax-limit-error', 'host-activity', 'core-limits'];
 
 /** A saved record, rebuilt field by field (anything malformed is dropped). */
 export function loadRecord(value: unknown): QuotaRecord | null {

@@ -3,8 +3,8 @@
   "id": "canvastty-accounts",
   "name": "CanvasTTY Accounts",
   "version": "0.1.0",
-  "description": "Any agent on any model: run Claude Code, Codex, OpenCode, Qwen Code or Kimi on a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API, chosen per launch as a Model account, with reasoning effort per launch. Orchestrators list and pick accounts for subagents. The agents' own sign-ins and ~/.claude, ~/.codex, ~/.ollama stay untouched.",
-  "description.ru": "Любой агент на любой модели: Claude Code, Codex, OpenCode, Qwen Code или Kimi на локальной модели Ollama, в Ollama Cloud, Z.AI, MiniMax, OpenRouter или любом совместимом API — учётная запись модели выбирается при запуске, как и глубина рассуждений. Оркестраторы видят и выбирают учётные записи для субагентов. Собственные входы агентов и ~/.claude, ~/.codex, ~/.ollama не меняются.",
+  "description": "Any agent on any model: run Claude Code, Codex, OpenCode, Qwen Code or Kimi on a local Ollama model, Ollama Cloud, Z.AI, MiniMax, OpenRouter or any compatible API, chosen per launch as a Model account, with reasoning effort per launch. GLM and MiniMax Coding Plans are subscriptions with a key: several accounts per plan form a pool that picks the one with the most quota left. Orchestrators list and pick accounts for subagents. The agents' own sign-ins and ~/.claude, ~/.codex, ~/.ollama stay untouched.",
+  "description.ru": "Любой агент на любой модели: Claude Code, Codex, OpenCode, Qwen Code или Kimi на локальной модели Ollama, в Ollama Cloud, Z.AI, MiniMax, OpenRouter или любом совместимом API — учётная запись модели выбирается при запуске, как и глубина рассуждений. Тарифы GLM и MiniMax Coding Plan — подписки по ключу: несколько учётных записей одного тарифа образуют пул, который берёт запись с наибольшим остатком квоты. Оркестраторы видят и выбирают учётные записи для субагентов. Собственные входы агентов и ~/.claude, ~/.codex, ~/.ollama не меняются.",
   "author": "CanvasTTY contributors",
   "permissions": [
     "storage",
@@ -19,18 +19,18 @@
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 9788,
-      "sha256": "662e1d726bf2d9aa0f9b4ed46e7a6a629f5c9b92da6646cc3a03bc3601c388b2"
+      "bytes": 11310,
+      "sha256": "bc0b94d5e663418aec654e58319462ad42f0b06989d8e152867fa26dbfdb67fc"
     },
     {
       "path": "README.ru.md",
-      "bytes": 15770,
-      "sha256": "7aabf85dcb20fd34b3e9b1bf6e38104e02821cc69a8cd4ce37de1f0d225bd9e3"
+      "bytes": 18171,
+      "sha256": "1705c90acf10ca123934e9f5c111c4bc66e1b7adca81bae61055b7f6983fa754"
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 164761,
-      "sha256": "f1c199bcc0121068dbd79058832d439ac7f09f4d97129496db81687d7a4b9c4b"
+      "bytes": 195471,
+      "sha256": "0f63ca04463a3fdf7a1e2151520f3a1f143fba9448f3bb148a6319d64fe24527"
     },
     {
       "path": "settings/accounts.html",
@@ -39,8 +39,8 @@
     },
     {
       "path": "settings/accounts.js",
-      "bytes": 47085,
-      "sha256": "26072e0961d50eccd5129678c5a212772ed5773e7b41ec8afdd64e4e3a8c889b"
+      "bytes": 62431,
+      "sha256": "07bde0c2ac7f490f49e7b4af927310f067bde393b846930a93724763f4f8037e"
     },
     {
       "path": "settings/accounts.css",
@@ -129,7 +129,7 @@
       "tools": [
         {
           "name": "list_routes",
-          "description": "List the person's model accounts you can start a subagent on: agent (provider), account, model, where it runs, and whether it is ready now (key saved, Ollama running, model installed with tool calling, plan quota not used up) or why not, and the plan's quota where it is known (percent left, reset time, how old the read is; unknown is not used up). A ready route has launchOptions: pass them unchanged to spawn_agent with the same provider. Subscription pools (kind \"subscription\") list the person's own extra sign-ins per agent (Claude Code, Codex, Grok, Kimi) with their quota; launchOptions {\"canvastty-accounts\":{\"account\":\"pool:<agent>\"}} lets the pool pick the account with the most room at launch. The agent's default CLI sign-in is not listed: spawn_agent without launchOptions uses it.",
+          "description": "List the person's model accounts you can start a subagent on: agent (provider), account, model, where it runs, and whether it is ready now (key saved, Ollama running, model installed with tool calling, plan quota not used up) or why not, and the plan's quota where it is known (percent left, reset time, how old the read is; unknown is not used up). A ready route has launchOptions: pass them unchanged to spawn_agent with the same provider. Subscription pools (kind \"subscription\") list the person's own extra sign-ins per agent (Claude Code, Codex, Grok, Kimi) and their coding-plan keys (GLM Coding Plan, MiniMax Coding Plan: rows with \"plan\", for Claude Code and OpenCode, several cards per account up to the person's limit) with their quota; launchOptions {\"canvastty-accounts\":{\"account\":\"pool:<agent>\"}} (or \"pool:glm\", \"pool:minimax\") lets the pool pick the account with the most room at launch. The agent's default CLI sign-in is not listed: spawn_agent without launchOptions uses it.",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -173,7 +173,7 @@
         },
         {
           "name": "pick_account",
-          "description": "Pick the account a subagent of this agent should run on: from the agent's subscription pool first (the person's own sign-ins: the free one with the most quota left, reserved for a minute so parallel picks spread), else the model accounts, the first ready one in the person's order, skipping accounts that cannot work right now (no key, Ollama not running, model missing, plan quota used up), with the reason. Returns spawn: { provider, launchOptions } to pass to spawn_agent. An error means no account is ready: spawn without launchOptions to use the agent's own sign-in, or ask the person.",
+          "description": "Pick the account a subagent of this agent should run on: from the agent's subscription pool first (the person's own sign-ins: the free one with the most quota left, reserved for a minute so parallel picks spread), then for Claude Code and OpenCode the person's coding plans (GLM, MiniMax: the account with the most quota left, under its card limit), else the model accounts, the first ready one in the person's order, skipping accounts that cannot work right now (no key, Ollama not running, model missing, plan quota used up), with the reason. Returns spawn: { provider, launchOptions } to pass to spawn_agent. An error means no account is ready: spawn without launchOptions to use the agent's own sign-in, or ask the person.",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -215,7 +215,7 @@
                   "pool",
                   "accounts"
                 ],
-                "description": "any (default): the agent's subscription pool first, then model accounts; pool: only the pool; accounts: only model accounts."
+                "description": "any (default): the agent's subscription pool and coding plans first, then model accounts; pool: only those subscriptions; accounts: only model accounts."
               }
             },
             "required": [
@@ -231,12 +231,12 @@
       "shares": [
         {
           "method": "accounts.routes",
-          "description": "Model account routes and subscription pools (pool:<agent>) with each account's quota and state, for routing; host names, account ids and your labels only, never keys, homes or paths.",
+          "description": "Model account routes and subscription pools (pool:<agent>, pool:glm, pool:minimax) with each account's quota and state; host names, account ids and your labels only, never keys, homes or paths.",
           "dataClass": "D1"
         },
         {
           "method": "accounts.quota",
-          "description": "Each model account's and pool account's quota, the tokens each pool account used in the last 5 h, and agents whose own sign-in CanvasTTY saw used up; no keys, homes or paths.",
+          "description": "Each model account's, pool account's and coding-plan account's quota, the tokens each pool account used in the last 5 h, and agents whose own sign-in CanvasTTY saw used up; no keys, homes or paths.",
           "dataClass": "D1"
         }
       ]

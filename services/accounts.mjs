@@ -287,6 +287,214 @@ function validOllamaModelName(name) {
   return typeof name === "string" && name.trim().length > 0 && name.length <= 200 && !/[\u0000- \u007f]/u.test(name) && !name.startsWith("-");
 }
 
+// src/plans/plans.ts
+var PLAN_PROVIDERS = ["glm", "minimax"];
+var PLAN_HARNESSES = Object.freeze(["claude", "opencode"]);
+var DEFAULT_CONCURRENCY = 2;
+var MAX_CONCURRENCY = 16;
+var PLAN_VALUE = "pool:";
+var PLAN_INFO = Object.freeze({
+  glm: {
+    label: "GLM Coding Plan",
+    anthropicPath: "/api/anthropic",
+    openaiPath: "/api/coding/paas/v4",
+    regions: { intl: { host: "api.z.ai", label: { en: "Z.AI (international)", ru: "Z.AI (\u043C\u0435\u0436\u0434\u0443\u043D\u0430\u0440\u043E\u0434\u043D\u044B\u0439)" } }, cn: { host: "open.bigmodel.cn", label: { en: "BigModel (China)", ru: "BigModel (\u041A\u0438\u0442\u0430\u0439)" } } },
+    legacyHosts: {},
+    model: "glm-5.3",
+    smallModel: "glm-5.3-flash",
+    preset: "zai-anthropic",
+    presets: ["zai-anthropic", "zai-openai"]
+  },
+  minimax: {
+    label: "MiniMax Coding Plan",
+    anthropicPath: "/anthropic",
+    openaiPath: "/v1",
+    regions: { intl: { host: "api.minimax.io", label: { en: "minimax.io (international)", ru: "minimax.io (\u043C\u0435\u0436\u0434\u0443\u043D\u0430\u0440\u043E\u0434\u043D\u044B\u0439)" } }, cn: { host: "api.minimax.cn", label: { en: "minimax.cn (China)", ru: "minimax.cn (\u041A\u0438\u0442\u0430\u0439)" } } },
+    legacyHosts: { "api.minimaxi.com": "cn" },
+    model: "MiniMax-M3.1-Flash",
+    smallModel: "MiniMax-M3.1-Flash",
+    preset: "minimax-anthropic",
+    presets: ["minimax-anthropic", "minimax-openai"]
+  }
+});
+var isPlanProvider = (value) => typeof value === "string" && PLAN_PROVIDERS.includes(value);
+var isPlanRegion = (value) => value === "intl" || value === "cn";
+var httpsHost = (url) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && !parsed.port ? parsed.hostname.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+};
+function planOf(account) {
+  const host = httpsHost(account.baseUrl);
+  if (!host) return null;
+  for (const provider of PLAN_PROVIDERS) {
+    const info = PLAN_INFO[provider];
+    if (!info.presets.includes(account.preset) && !["custom-anthropic", "custom-openai"].includes(account.preset)) continue;
+    for (const region of ["intl", "cn"]) if (info.regions[region].host === host) return { provider, region, host };
+    const legacy = info.legacyHosts[host];
+    if (legacy) return { provider, region: legacy, host };
+  }
+  return null;
+}
+function planEndpoints(plan) {
+  const info = PLAN_INFO[plan.provider];
+  return { anthropic: `https://${plan.host}${info.anthropicPath}`, openai: `https://${plan.host}${info.openaiPath}`, origin: `https://${plan.host}` };
+}
+function planHarnesses(account) {
+  return [.../* @__PURE__ */ new Set([...PLAN_HARNESSES, ...account.agents])];
+}
+function planLaunchAccount(account, harness) {
+  const plan = planOf(account);
+  if (!plan || !PLAN_HARNESSES.includes(harness)) return account;
+  return { ...account, preset: PLAN_INFO[plan.provider].preset, baseUrl: planEndpoints(plan).anthropic, responsesApi: void 0 };
+}
+var concurrencyOf = (account) => account.concurrency ?? DEFAULT_CONCURRENCY;
+function newPlanAccount(input) {
+  const info = PLAN_INFO[input.provider];
+  return {
+    id: input.id,
+    label: input.label,
+    preset: info.preset,
+    baseUrl: `https://${info.regions[input.region].host}${info.anthropicPath}`,
+    model: info.model,
+    ...info.smallModel !== info.model ? { smallModel: info.smallModel } : {},
+    agents: ["claude", "opencode"],
+    trust: input.trust ?? "unset",
+    ...input.concurrency !== void 0 ? { concurrency: input.concurrency } : {},
+    ...input.brokerable ? { brokerable: true } : {}
+  };
+}
+
+// src/pools/providers.ts
+var POOL_PROVIDERS = ["claude", "codex", "grok", "kimi"];
+var POOL_INFO = Object.freeze({
+  claude: {
+    label: "Claude Code",
+    homeVariable: "CLAUDE_CONFIG_DIR",
+    env: {},
+    // Linux and Windows (and a macOS Keychain fallback); on macOS the sign-in is a Keychain entry keyed to the folder,
+    // so the core's limits read (or Claude's own .claude.json account marker) tells.
+    credentialFiles: [".credentials.json"],
+    limits: true,
+    limitsReadRefreshes: false,
+    perHome: "one",
+    signIn: { en: "Claude Code starts its first-run setup: choose a theme, then sign in with your Claude account in the browser (or type /login).", ru: "Claude Code \u043D\u0430\u0447\u043D\u0451\u0442 \u043F\u0435\u0440\u0432\u0443\u044E \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0443: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u0435\u043C\u0443 \u0438 \u0432\u043E\u0439\u0434\u0438\u0442\u0435 \u0441\u0432\u043E\u0435\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u044C\u044E Claude \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 (\u0438\u043B\u0438 \u043D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login)." }
+  },
+  codex: {
+    label: "Codex",
+    homeVariable: "CODEX_HOME",
+    env: { CODEX_API_KEY: "", CODEX_ACCESS_TOKEN: "" },
+    credentialFiles: ["auth.json"],
+    limits: true,
+    limitsReadRefreshes: true,
+    perHome: "one",
+    signIn: { en: 'Codex shows its sign-in screen: choose "Sign in with ChatGPT" and finish in the browser.', ru: "Codex \u043F\u043E\u043A\u0430\u0436\u0435\u0442 \u044D\u043A\u0440\u0430\u043D \u0432\u0445\u043E\u0434\u0430: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \xABSign in with ChatGPT\xBB \u0438 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
+  },
+  grok: {
+    label: "Grok",
+    homeVariable: "GROK_HOME",
+    env: {},
+    credentialFiles: ["auth.json"],
+    limits: true,
+    limitsReadRefreshes: false,
+    perHome: "one",
+    signIn: { en: "Grok opens the browser to sign in at grok.com (password or Google).", ru: "Grok \u043E\u0442\u043A\u0440\u043E\u0435\u0442 \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u0434\u043B\u044F \u0432\u0445\u043E\u0434\u0430 \u043D\u0430 grok.com (\u043F\u0430\u0440\u043E\u043B\u044C \u0438\u043B\u0438 Google)." }
+  },
+  kimi: {
+    label: "Kimi",
+    homeVariable: "KIMI_CODE_HOME",
+    env: {},
+    // CanvasTTY reads a Kimi home through one `kimi web` started there, which may refresh the sign-in.
+    credentialFiles: [],
+    credentialFolder: "credentials",
+    limits: true,
+    limitsReadRefreshes: true,
+    perHome: "one",
+    signIn: { en: "Type /login in Kimi and choose Kimi Code (OAuth); finish in the browser.", ru: "\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login \u0432 Kimi \u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 Kimi Code (OAuth); \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
+  }
+});
+var NOT_POOLED = Object.freeze({
+  qwen: "Qwen Code has no variable that moves its home (its sign-in is always ~/.qwen), and the Qwen OAuth free tier closed on 2026-04-15.",
+  opencode: "OpenCode Go signs in with an API key, not a browser sign-in: add it as a model account with its key."
+});
+var isPoolProvider = (value) => typeof value === "string" && POOL_PROVIDERS.includes(value);
+
+// src/pools/model.ts
+var DATA_CLASSES = ["D0", "D1", "D2", "D3"];
+var RANK = Object.freeze({ D0: 0, D1: 1, D2: 2, D3: 3 });
+var MAX_POOL_ACCOUNTS = 1e3;
+var ID = /^[a-z0-9][a-z0-9-]{0,39}$/u;
+var plain = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
+function validatePoolAccount(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A pool account must be an object.");
+  const raw = value;
+  const unknown = Object.keys(raw).find((key) => !["id", "provider", "label", "trust", "addedAt"].includes(key));
+  if (unknown) throw new Error(`Unknown pool account field ${unknown.slice(0, 40)}.`);
+  if (typeof raw.id !== "string" || !ID.test(raw.id)) throw new Error("Pool account id must be 1\u201340 lowercase letters, digits or dashes.");
+  if (!isPoolProvider(raw.provider)) throw new Error("Choose an agent for the pool account.");
+  if (!plain(raw.label, 80)) throw new Error("Give the account a name (at most 80 characters).");
+  if (raw.trust !== "unset" && !DATA_CLASSES.includes(raw.trust)) throw new Error("Choose how far you trust the account: not set, D0, D1, D2 or D3.");
+  const addedAt = typeof raw.addedAt === "number" && Number.isFinite(raw.addedAt) ? raw.addedAt : 0;
+  return { id: raw.id, provider: raw.provider, label: raw.label.trim(), trust: raw.trust, addedAt };
+}
+function loadPools(value) {
+  const list = value && typeof value === "object" && Array.isArray(value.accounts) ? value.accounts : [];
+  const accounts = [];
+  for (const entry of list.slice(0, MAX_POOL_ACCOUNTS)) {
+    try {
+      const account = validatePoolAccount(entry);
+      if (!accounts.some((existing) => existing.id === account.id)) accounts.push(account);
+    } catch {
+    }
+  }
+  return { version: 1, accounts };
+}
+function newPoolId(provider, label, taken) {
+  const slug = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 24);
+  const base = `${provider}-${slug || "account"}`.slice(0, 32).replace(/-+$/u, "");
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+var covers = (trust, dataClass) => trust !== "unset" && RANK[trust] >= RANK[dataClass];
+var tier = (view) => view.state === "low" ? 3 : view.confidence === "exact" ? 0 : view.confidence === "estimated" ? 1 : 2;
+var headroom = (view) => view.remainingPercent === null ? -1 : Math.floor(view.remainingPercent / 10);
+function rankPool(members, facts, request = {}) {
+  const mode = request.dataClass ? request.mode ?? "warn" : "off";
+  const ranked = [];
+  const skipped = [];
+  members.forEach((account, index) => {
+    const known = facts(account);
+    if (known.signIn === "signed-out") {
+      skipped.push({ account, reason: "not signed in (sign in again in the Accounts settings)" });
+      return;
+    }
+    if (known.signIn === "expired") {
+      skipped.push({ account, reason: "its sign-in expired (sign in again in the Accounts settings)" });
+      return;
+    }
+    if (known.quota.state === "exhausted") {
+      skipped.push({ account, reason: `its quota is used up (${known.quota.note})` });
+      return;
+    }
+    const capacity = known.capacity ?? 1;
+    if (known.active >= capacity) {
+      skipped.push({ account, reason: capacity === 1 ? "a card already runs on it (one card per sign-in, so its refresh token is not used twice)" : `${known.active} cards already run on it (the person allows ${capacity} at once)` });
+      return;
+    }
+    const covered = request.dataClass && mode !== "off" ? covers(account.trust, request.dataClass) : null;
+    if (covered === false && mode === "strict") {
+      skipped.push({ account, reason: account.trust === "unset" ? `the person has not set its data level; this task is ${request.dataClass}` : `trusted up to ${account.trust}; this task is ${request.dataClass}` });
+      return;
+    }
+    ranked.push({ account, facts: known, covers: covered, index, ...covered === false ? { note: `below this task's class ${request.dataClass} (${account.trust === "unset" ? "level not set" : `up to ${account.trust}`}); the person chose to be warned only` } : {} });
+  });
+  ranked.sort((a, b) => (mode === "warn" ? Number(a.covers === false) - Number(b.covers === false) : 0) || tier(a.facts.quota) - tier(b.facts.quota) || headroom(b.facts.quota) - headroom(a.facts.quota) || a.facts.active - b.facts.active || (a.facts.quota.resetsAt ?? Infinity) - (b.facts.quota.resetsAt ?? Infinity) || (a.facts.lastUsedAt ?? 0) - (b.facts.lastUsedAt ?? 0) || a.index - b.index);
+  return { ranked: ranked.map(({ index: _index, ...entry }) => entry), skipped };
+}
+
 // src/shared/accounts.ts
 var HARNESSES = ["claude", "codex", "opencode", "qwen", "kimi"];
 var HARNESS_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", qwen: "Qwen Code", kimi: "Kimi" };
@@ -379,14 +587,14 @@ function ollamaWireModel(shape, model) {
   if (shape === "cloud-local") return ref.source === "cloud" ? { ok: true, model: model.trim() } : { ok: false, reason: "local-on-cloud" };
   return { ok: true, model: ref.base };
 }
-var ID = /^[a-z0-9][a-z0-9-]{0,39}$/u;
+var ID2 = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 var plainText = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
 function validateAccount(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("An account must be an object.");
   const raw = value;
-  const unknown = Object.keys(raw).find((key) => !["id", "label", "preset", "baseUrl", "model", "responsesApi", "agents", "brokerable"].includes(key));
+  const unknown = Object.keys(raw).find((key) => !["id", "label", "preset", "baseUrl", "model", "responsesApi", "agents", "brokerable", "trust", "concurrency", "smallModel"].includes(key));
   if (unknown) throw new Error(`Unknown account field ${unknown.slice(0, 40)}.`);
-  if (typeof raw.id !== "string" || !ID.test(raw.id)) throw new Error("Account id must be 1\u201340 lowercase letters, digits or dashes.");
+  if (typeof raw.id !== "string" || !ID2.test(raw.id)) throw new Error("Account id must be 1\u201340 lowercase letters, digits or dashes.");
   if (!plainText(raw.label, 80)) throw new Error("Give the account a name (at most 80 characters).");
   const preset = PRESETS.find((entry) => entry.id === raw.preset);
   if (!preset) throw new Error("Choose a provider for the account.");
@@ -425,7 +633,30 @@ function validateAccount(value) {
   if (brokerable && !brokerableShape({ preset: preset.id, baseUrl })) {
     throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : "Only an https API account with a key can be used by other extensions.");
   }
-  return { id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...responsesApi ? { responsesApi } : {}, agents, ...brokerable ? { brokerable } : {} };
+  const plan = planOf({ preset: preset.id, baseUrl });
+  if (!plan && (raw.trust !== void 0 || raw.concurrency !== void 0 || raw.smallModel !== void 0)) throw new Error("Only a coding-plan account (GLM, MiniMax) has a data level, a card limit or a small model.");
+  if (raw.trust !== void 0 && raw.trust !== "unset" && !DATA_CLASSES.includes(raw.trust)) throw new Error("Choose how far you trust the account: not set, D0, D1, D2 or D3.");
+  if (raw.concurrency !== void 0 && !(typeof raw.concurrency === "number" && Number.isInteger(raw.concurrency) && raw.concurrency >= 1 && raw.concurrency <= MAX_CONCURRENCY)) {
+    throw new Error(`Cards at once must be a whole number from 1 to ${MAX_CONCURRENCY}.`);
+  }
+  let smallModel;
+  if (raw.smallModel !== void 0 && raw.smallModel !== "") {
+    if (typeof raw.smallModel !== "string" || !plainText(raw.smallModel.trim(), 200) || /\s/u.test(raw.smallModel.trim()) || raw.smallModel.trim().startsWith("-")) throw new Error("The small model name is invalid.");
+    smallModel = raw.smallModel.trim();
+  }
+  return {
+    id: raw.id,
+    label: raw.label.trim(),
+    preset: preset.id,
+    baseUrl,
+    model,
+    ...responsesApi ? { responsesApi } : {},
+    agents,
+    ...brokerable ? { brokerable } : {},
+    ...plan && raw.trust !== void 0 ? { trust: raw.trust } : {},
+    ...plan && raw.concurrency !== void 0 ? { concurrency: raw.concurrency } : {},
+    ...smallModel && smallModel !== model ? { smallModel } : {}
+  };
 }
 function brokerableShape(account) {
   const protocol = protocolOf(account);
@@ -445,7 +676,7 @@ function brokerOfferOf(account, flatRate) {
     protocol,
     baseUrl: protocol === "anthropic" ? `${account.baseUrl}/v1` : account.baseUrl,
     paths: protocol === "anthropic" ? ["/messages"] : ["/chat/completions", ...account.responsesApi ? ["/responses"] : [], "/models"],
-    models: [account.model],
+    models: [account.model, ...account.smallModel ? [account.smallModel] : []],
     secretKey: secretKeyOf(account.id),
     auth: "bearer",
     flatRate
@@ -475,6 +706,11 @@ function loadSettings(value) {
     }
   }
   return { version: 1, accounts };
+}
+function newAccountId(label, taken) {
+  const base = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 32) || "account";
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
 }
 
 // src/launch/harness.ts
@@ -521,7 +757,7 @@ function claudePlan(input, context) {
     ANTHROPIC_MODEL: input.model,
     ANTHROPIC_DEFAULT_OPUS_MODEL: input.model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: input.model,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: input.model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: input.smallModel ?? input.model,
     CLAUDE_CODE_SUBAGENT_MODEL: input.model,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     DISABLE_ERROR_REPORTING: "1",
@@ -604,7 +840,7 @@ function codexPlan(input, context) {
   };
 }
 function openCodePlan(input, context) {
-  if (APPROVAL_CONFIG_KEY.test(input.model) || APPROVAL_CONFIG_KEY.test(input.providerId)) {
+  if (APPROVAL_CONFIG_KEY.test(input.model) || APPROVAL_CONFIG_KEY.test(input.providerId) || input.smallModel !== void 0 && APPROVAL_CONFIG_KEY.test(input.smallModel)) {
     throw new Error(`OpenCode cannot run the model ${input.model.slice(0, 60)} from an account: its name would be a key CanvasTTY reserves for approval settings.`);
   }
   const npm = input.protocol === "anthropic" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible";
@@ -613,9 +849,11 @@ function openCodePlan(input, context) {
     npm,
     name: "CanvasTTY",
     options: { baseURL, ...input.secretKey !== void 0 ? { apiKey: `{env:${MODEL_KEY_ENV}}` } : {} },
-    models: { [input.model]: { name: input.model, ...context ? { limit: { context, output: Math.min(32768, Math.floor(context / 4)) } } : {} } }
+    models: Object.fromEntries([input.model, ...input.smallModel && input.smallModel !== input.model ? [input.smallModel] : []].map((name) => [name, { name, ...context ? { limit: { context, output: Math.min(32768, Math.floor(context / 4)) } } : {} }]))
   };
   const model = `${input.providerId}/${input.model}`;
+  const small = input.smallModel ? `${input.providerId}/${input.smallModel}` : model;
+  const smallAgents = /* @__PURE__ */ new Set(["title", "summary"]);
   return {
     env: { OPENCODE_CONFIG: `${LAUNCH_FILES}/opencode.json` },
     secretEnv: input.secretKey !== void 0 ? { [MODEL_KEY_ENV]: input.secretKey } : {},
@@ -625,8 +863,8 @@ function openCodePlan(input, context) {
       enabled_providers: [input.providerId],
       provider: { [input.providerId]: provider },
       model,
-      small_model: model,
-      agent: Object.fromEntries(OPENCODE_NATIVE_AGENTS.map((name) => [name, { model }]))
+      small_model: small,
+      agent: Object.fromEntries(OPENCODE_NATIVE_AGENTS.map((name) => [name, { model: smallAgents.has(name) ? small : model }]))
     }) }]
   };
 }
@@ -968,7 +1206,7 @@ function checkEffort(effort) {
 }
 async function listRoutes(accounts, facts, filter = {}) {
   const effort = checkEffort(filter.effort);
-  const wanted = accounts.map((account) => HARNESSES.filter((harness) => (filter.provider === void 0 || filter.provider === harness) && account.agents.includes(harness) && harnessSupport(harness, account).ok && (!filter.model || account.model.toLowerCase().includes(filter.model.toLowerCase()))));
+  const wanted = accounts.map((account) => HARNESSES.filter((harness) => (filter.provider === void 0 || filter.provider === harness) && (planOf(account) ? planHarnesses(account) : account.agents).includes(harness) && harnessSupport(harness, planLaunchAccount(account, harness)).ok && (!filter.model || account.model.toLowerCase().includes(filter.model.toLowerCase()))));
   const evaluated = await mapBounded(accounts, PROBE_CONCURRENCY, (account, index) => wanted[index].length ? stateOf(account, facts) : Promise.resolve(null));
   const rows = [];
   accounts.forEach((account, index) => {
@@ -989,18 +1227,20 @@ async function listRoutes(accounts, facts, filter = {}) {
         state = "quota-exhausted";
         reason = `its quota is used up (${quota.note})`;
       }
+      const plan = planOf(account);
       rows.push({
         provider: harness,
         agent: HARNESS_LABELS[harness],
         accountId: account.id,
         account: account.label,
-        kind: shape === "local" ? "ollama" : shape ? "ollama-cloud" : "api-key",
+        kind: plan ? "subscription" : shape === "local" ? "ollama" : shape ? "ollama-cloud" : "api-key",
         model: account.model,
-        endpoint: hostOf(account.baseUrl),
+        endpoint: hostOf(planLaunchAccount(account, harness).baseUrl),
         state,
         ...reason !== void 0 ? { reason } : {},
         ...state === "ready" ? { launchOptions: launchOptionsFor(account.id, effort) } : {},
-        ...quota ? { quota: routeQuota(quota) } : {}
+        ...quota ? { quota: routeQuota(quota) } : {},
+        ...plan ? { plan: plan.provider, trust: account.trust ?? "unset" } : {}
       });
     }
   });
@@ -1223,7 +1463,7 @@ function nextReadAt({ record: record2, now, random }) {
 }
 var num = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
 var text = (value, max) => typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
-var SOURCES = ["zai-quota-api", "zai-limit-error", "host-activity", "core-limits"];
+var SOURCES = ["zai-quota-api", "zai-limit-error", "minimax-quota-api", "minimax-limit-error", "host-activity", "core-limits"];
 function loadRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value;
@@ -1376,6 +1616,87 @@ function parseZaiLimitError(input, now) {
 }
 var limitObservation = (limit, now) => ({ source: "zai-limit-error", at: now, windows: [], exhausted: { until: limit.until, code: limit.code, ...limit.zoneGuessed ? { zoneGuessed: true } : {} } });
 
+// src/quota/minimax.ts
+var MINIMAX_QUOTA_HOSTS = Object.freeze(["api.minimax.io", "api.minimax.cn", "api.minimaxi.com"]);
+var MINIMAX_QUOTA_PATH = "/v1/token_plan/remains";
+var minimaxPayAsYouGoKey = (key) => key.startsWith("sk-api-");
+var isRecord3 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+var finite2 = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+var clamp2 = (value) => Math.max(0, Math.min(100, Math.round(value * 10) / 10));
+var textFamily = (name) => /^minimax-m|^general$|^text/iu.test(name);
+function usedPercentOf(count, total, remainingPercent, status) {
+  if (status === 2) return 100;
+  if (remainingPercent !== null) return clamp2(100 - Math.min(100, remainingPercent));
+  if (count === null || total === null || total <= 0 || count < 0 || count > total) return null;
+  return clamp2((total - count) / total * 100);
+}
+function parseMiniMaxQuota(body, now) {
+  if (!isRecord3(body)) throw new ZaiQuotaError("the quota answer is not an object");
+  const base = isRecord3(body.base_resp) ? body.base_resp : null;
+  const code = base ? finite2(base.status_code) : null;
+  if (code !== null && code !== 0) throw new ZaiQuotaError(`the quota endpoint answered code ${String(code).slice(0, 8)}`, code === 1004 || code === 2049 ? "auth" : "refused");
+  if (!Array.isArray(body.model_remains)) throw new ZaiQuotaError("the quota answer has no model_remains");
+  const windows = [];
+  for (const raw of body.model_remains.slice(0, 16)) {
+    if (!isRecord3(raw) || typeof raw.model_name !== "string") continue;
+    const name = raw.model_name.slice(0, 40);
+    const models = textFamily(name);
+    const family = models ? "text" : name.toLowerCase().replace(/[^a-z0-9-]+/gu, "-").slice(0, 20);
+    const intervalTotal = finite2(raw.current_interval_total_count);
+    const weeklyTotal = finite2(raw.current_weekly_total_count);
+    const intervalStatus = finite2(raw.current_interval_status);
+    const weeklyStatus = finite2(raw.current_weekly_status);
+    if (intervalTotal === 0 && weeklyTotal === 0 && intervalStatus === 3 && weeklyStatus === 3) continue;
+    const slots = [
+      { kind: "interval", total: intervalTotal, count: finite2(raw.current_interval_usage_count), percent: finite2(raw.current_interval_remaining_percent), status: intervalStatus, start: finite2(raw.start_time), end: finite2(raw.end_time) },
+      { kind: "weekly", total: weeklyTotal, count: finite2(raw.current_weekly_usage_count), percent: finite2(raw.current_weekly_remaining_percent), status: weeklyStatus, start: finite2(raw.weekly_start_time), end: finite2(raw.weekly_end_time) }
+    ];
+    for (const slot of slots) {
+      if (slot.status === 3 || slot.total === 0 && slot.status === null) continue;
+      const usedPercent = usedPercentOf(slot.count, slot.total, slot.percent, slot.status);
+      if (usedPercent === null) continue;
+      const minutes = slot.start !== null && slot.end !== null && slot.end > slot.start ? Math.round((slot.end - slot.start) / 6e4) : slot.kind === "weekly" ? 10080 : 300;
+      let resetsAt = slot.end !== null && slot.end > 1e12 ? slot.end : null;
+      if (resetsAt !== null && (resetsAt < now - 864e5 || resetsAt > now + (minutes + 1) * 6e4)) resetsAt = null;
+      const total = slot.total !== null && slot.total > 0 ? slot.total : null;
+      const id = `minimax:${family}:${slot.kind === "weekly" ? "weekly" : minutes}`;
+      if (windows.some((window) => window.id === id)) continue;
+      windows.push({
+        id,
+        label: `${models ? "" : `${name} `}${slot.kind === "weekly" ? "7d" : minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`}`.trim(),
+        usedPercent,
+        used: total !== null ? Math.round(total * usedPercent / 100) : null,
+        limit: total,
+        windowMinutes: minutes,
+        resetsAt,
+        models
+      });
+    }
+  }
+  if (!windows.some((window) => window.models)) throw new ZaiQuotaError("the quota answer has no text-model window");
+  return { source: "minimax-quota-api", at: now, windows, plan: null };
+}
+function parseMiniMaxLimitError(input) {
+  let text2 = "";
+  let code = null;
+  if (typeof input === "string") {
+    text2 = input.slice(0, 4e3);
+    try {
+      input = JSON.parse(text2);
+    } catch {
+    }
+  }
+  if (isRecord3(input)) {
+    const base = isRecord3(input.base_resp) ? input.base_resp : isRecord3(input.error) ? input.error : input;
+    const value = base.status_code ?? base.code;
+    if (typeof value === "number" || typeof value === "string") code = String(value).slice(0, 8);
+    const message = base.status_msg ?? base.message ?? base.msg;
+    if (typeof message === "string") text2 = message.slice(0, 600);
+  }
+  if (/usage limit|quota (?:is )?(?:exceeded|exhausted|used up)|token plan.*(?:limit|exhausted)|coding plan.*(?:limit|exhausted)/iu.test(text2)) return { code: code ?? "limit" };
+  return null;
+}
+
 // src/quota/reader.ts
 var QUOTA_FILE = "quota.json";
 var TICK_MS = 15e3;
@@ -1396,7 +1717,21 @@ var hostOf2 = (url) => {
 function quotaUrlOf(account) {
   if (!accountKeyed(account) || decisionsOnlyAccount(account)) return null;
   const host = hostOf2(account.baseUrl);
-  return host && ZAI_QUOTA_HOSTS.includes(host) ? `https://${host}${ZAI_QUOTA_PATH}` : null;
+  if (!host) return null;
+  if (ZAI_QUOTA_HOSTS.includes(host)) return `https://${host}${ZAI_QUOTA_PATH}`;
+  if (MINIMAX_QUOTA_HOSTS.includes(host)) return `https://${host}${MINIMAX_QUOTA_PATH}`;
+  return null;
+}
+var isMiniMax = (url) => {
+  try {
+    return MINIMAX_QUOTA_HOSTS.includes(new URL(url).host);
+  } catch {
+    return false;
+  }
+};
+function miniMaxLimit(record2, code, now) {
+  const resets = record2.windows.filter((window) => window.models && window.resetsAt !== null && window.resetsAt > now).map((window) => window.resetsAt);
+  return { source: "minimax-limit-error", at: now, windows: [], exhausted: { until: resets.length ? Math.min(...resets) : null, code } };
 }
 var untracked = (id) => `untracked:${id}`;
 var offline = async () => {
@@ -1498,9 +1833,16 @@ var QuotaReader = class {
     const url = quotaUrlOf(account) ?? untracked(account.id);
     this.apply(account.id, observe(this.record(account, url), observation, this.now()));
   }
-  /** A limit error text or body for an account (Z.AI codes); true when it was one. */
+  /** A limit error text or body for an account (Z.AI codes, MiniMax's usage-limit answers); true when it was one. */
   noteError(account, body) {
     const now = this.now();
+    const url = quotaUrlOf(account);
+    if (url && isMiniMax(url)) {
+      const found = parseMiniMaxLimitError(body);
+      if (!found) return false;
+      this.noteLimit(account, miniMaxLimit(this.record(account, url), found.code, now));
+      return true;
+    }
     const limit = parseZaiLimitError(body, now);
     if (!limit) return false;
     this.noteLimit(account, limitObservation(limit, now));
@@ -1587,6 +1929,12 @@ var QuotaReader = class {
       this.set(account.id, readFailed(this.record(account, url), "no key saved for this address", started2));
       return;
     }
+    const minimax = isMiniMax(url);
+    if (minimax && minimaxPayAsYouGoKey(key)) {
+      this.set(account.id, { ...readFailed(this.record(account, url), "a pay-as-you-go key (sk-api-\u2026) has no plan quota to read", started2), failures: 0 });
+      this.due.set(account.id, started2 + 36e5);
+      return;
+    }
     const scrub = (text2) => key ? text2.split(key).join("[key]") : text2;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_MS);
@@ -1597,6 +1945,31 @@ var QuotaReader = class {
       const body = (await response.text()).slice(0, MAX_BODY2);
       const now = this.now();
       if (response.status === 401 || response.status === 403) throw new ZaiQuotaError(`the provider refused the key (${response.status})`, "auth");
+      if (minimax) {
+        if (response.status === 429 || response.status >= 400) {
+          const found = parseMiniMaxLimitError(body);
+          if (found) {
+            this.apply(account.id, observe(this.record(account, url), miniMaxLimit(this.record(account, url), found.code, now), now));
+            return;
+          }
+          throw new ZaiQuotaError(`the quota endpoint answered HTTP ${response.status}`, "refused");
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          throw new ZaiQuotaError("the quota answer is not JSON");
+        }
+        const refusedForLimit = parseMiniMaxLimitError(parsed);
+        if (refusedForLimit) {
+          this.apply(account.id, observe(this.record(account, url), miniMaxLimit(this.record(account, url), refusedForLimit.code, now), now));
+          return;
+        }
+        const result2 = observe(this.record(account, url), parseMiniMaxQuota(parsed, now), now);
+        result2.record.lastAttemptAt = now;
+        this.apply(account.id, result2);
+        return;
+      }
       if (response.status === 429 || response.status >= 400) {
         const limit2 = parseZaiLimitError(body, now);
         if (limit2) {
@@ -1664,134 +2037,6 @@ import { readFileSync as readFileSync2 } from "node:fs";
 import { mkdir as mkdir3, readFile as readFile2, readdir, rename as rename3, rm as rm3, stat, writeFile as writeFile3 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as join3 } from "node:path";
-
-// src/pools/providers.ts
-var POOL_PROVIDERS = ["claude", "codex", "grok", "kimi"];
-var POOL_INFO = Object.freeze({
-  claude: {
-    label: "Claude Code",
-    homeVariable: "CLAUDE_CONFIG_DIR",
-    env: {},
-    // Linux and Windows (and a macOS Keychain fallback); on macOS the sign-in is a Keychain entry keyed to the folder,
-    // so the core's limits read (or Claude's own .claude.json account marker) tells.
-    credentialFiles: [".credentials.json"],
-    limits: true,
-    limitsReadRefreshes: false,
-    perHome: "one",
-    signIn: { en: "Claude Code starts its first-run setup: choose a theme, then sign in with your Claude account in the browser (or type /login).", ru: "Claude Code \u043D\u0430\u0447\u043D\u0451\u0442 \u043F\u0435\u0440\u0432\u0443\u044E \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0443: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u0435\u043C\u0443 \u0438 \u0432\u043E\u0439\u0434\u0438\u0442\u0435 \u0441\u0432\u043E\u0435\u0439 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u044C\u044E Claude \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 (\u0438\u043B\u0438 \u043D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login)." }
-  },
-  codex: {
-    label: "Codex",
-    homeVariable: "CODEX_HOME",
-    env: { CODEX_API_KEY: "", CODEX_ACCESS_TOKEN: "" },
-    credentialFiles: ["auth.json"],
-    limits: true,
-    limitsReadRefreshes: true,
-    perHome: "one",
-    signIn: { en: 'Codex shows its sign-in screen: choose "Sign in with ChatGPT" and finish in the browser.', ru: "Codex \u043F\u043E\u043A\u0430\u0436\u0435\u0442 \u044D\u043A\u0440\u0430\u043D \u0432\u0445\u043E\u0434\u0430: \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \xABSign in with ChatGPT\xBB \u0438 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
-  },
-  grok: {
-    label: "Grok",
-    homeVariable: "GROK_HOME",
-    env: {},
-    credentialFiles: ["auth.json"],
-    limits: true,
-    limitsReadRefreshes: false,
-    perHome: "one",
-    signIn: { en: "Grok opens the browser to sign in at grok.com (password or Google).", ru: "Grok \u043E\u0442\u043A\u0440\u043E\u0435\u0442 \u0431\u0440\u0430\u0443\u0437\u0435\u0440 \u0434\u043B\u044F \u0432\u0445\u043E\u0434\u0430 \u043D\u0430 grok.com (\u043F\u0430\u0440\u043E\u043B\u044C \u0438\u043B\u0438 Google)." }
-  },
-  kimi: {
-    label: "Kimi",
-    homeVariable: "KIMI_CODE_HOME",
-    env: {},
-    // CanvasTTY reads a Kimi home through one `kimi web` started there, which may refresh the sign-in.
-    credentialFiles: [],
-    credentialFolder: "credentials",
-    limits: true,
-    limitsReadRefreshes: true,
-    perHome: "one",
-    signIn: { en: "Type /login in Kimi and choose Kimi Code (OAuth); finish in the browser.", ru: "\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 /login \u0432 Kimi \u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 Kimi Code (OAuth); \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u0435 \u0432\u0445\u043E\u0434 \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435." }
-  }
-});
-var NOT_POOLED = Object.freeze({
-  qwen: "Qwen Code has no variable that moves its home (its sign-in is always ~/.qwen), and the Qwen OAuth free tier closed on 2026-04-15.",
-  opencode: "OpenCode Go signs in with an API key, not a browser sign-in: add it as a model account with its key."
-});
-var isPoolProvider = (value) => typeof value === "string" && POOL_PROVIDERS.includes(value);
-
-// src/pools/model.ts
-var DATA_CLASSES = ["D0", "D1", "D2", "D3"];
-var RANK = Object.freeze({ D0: 0, D1: 1, D2: 2, D3: 3 });
-var MAX_POOL_ACCOUNTS = 1e3;
-var ID2 = /^[a-z0-9][a-z0-9-]{0,39}$/u;
-var plain = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
-function validatePoolAccount(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A pool account must be an object.");
-  const raw = value;
-  const unknown = Object.keys(raw).find((key) => !["id", "provider", "label", "trust", "addedAt"].includes(key));
-  if (unknown) throw new Error(`Unknown pool account field ${unknown.slice(0, 40)}.`);
-  if (typeof raw.id !== "string" || !ID2.test(raw.id)) throw new Error("Pool account id must be 1\u201340 lowercase letters, digits or dashes.");
-  if (!isPoolProvider(raw.provider)) throw new Error("Choose an agent for the pool account.");
-  if (!plain(raw.label, 80)) throw new Error("Give the account a name (at most 80 characters).");
-  if (raw.trust !== "unset" && !DATA_CLASSES.includes(raw.trust)) throw new Error("Choose how far you trust the account: not set, D0, D1, D2 or D3.");
-  const addedAt = typeof raw.addedAt === "number" && Number.isFinite(raw.addedAt) ? raw.addedAt : 0;
-  return { id: raw.id, provider: raw.provider, label: raw.label.trim(), trust: raw.trust, addedAt };
-}
-function loadPools(value) {
-  const list = value && typeof value === "object" && Array.isArray(value.accounts) ? value.accounts : [];
-  const accounts = [];
-  for (const entry of list.slice(0, MAX_POOL_ACCOUNTS)) {
-    try {
-      const account = validatePoolAccount(entry);
-      if (!accounts.some((existing) => existing.id === account.id)) accounts.push(account);
-    } catch {
-    }
-  }
-  return { version: 1, accounts };
-}
-function newPoolId(provider, label, taken) {
-  const slug = label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 24);
-  const base = `${provider}-${slug || "account"}`.slice(0, 32).replace(/-+$/u, "");
-  if (!taken.has(base)) return base;
-  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
-}
-var covers = (trust, dataClass) => trust !== "unset" && RANK[trust] >= RANK[dataClass];
-var tier = (view) => view.state === "low" ? 3 : view.confidence === "exact" ? 0 : view.confidence === "estimated" ? 1 : 2;
-var headroom = (view) => view.remainingPercent === null ? -1 : Math.floor(view.remainingPercent / 10);
-function rankPool(members, facts, request = {}) {
-  const mode = request.dataClass ? request.mode ?? "warn" : "off";
-  const ranked = [];
-  const skipped = [];
-  members.forEach((account, index) => {
-    const known = facts(account);
-    if (known.signIn === "signed-out") {
-      skipped.push({ account, reason: "not signed in (sign in again in the Accounts settings)" });
-      return;
-    }
-    if (known.signIn === "expired") {
-      skipped.push({ account, reason: "its sign-in expired (sign in again in the Accounts settings)" });
-      return;
-    }
-    if (known.quota.state === "exhausted") {
-      skipped.push({ account, reason: `its quota is used up (${known.quota.note})` });
-      return;
-    }
-    if (known.active > 0) {
-      skipped.push({ account, reason: "a card already runs on it (one card per sign-in, so its refresh token is not used twice)" });
-      return;
-    }
-    const covered = request.dataClass && mode !== "off" ? covers(account.trust, request.dataClass) : null;
-    if (covered === false && mode === "strict") {
-      skipped.push({ account, reason: account.trust === "unset" ? `the person has not set its data level; this task is ${request.dataClass}` : `trusted up to ${account.trust}; this task is ${request.dataClass}` });
-      return;
-    }
-    ranked.push({ account, facts: known, covers: covered, index, ...covered === false ? { note: `below this task's class ${request.dataClass} (${account.trust === "unset" ? "level not set" : `up to ${account.trust}`}); the person chose to be warned only` } : {} });
-  });
-  ranked.sort((a, b) => (mode === "warn" ? Number(a.covers === false) - Number(b.covers === false) : 0) || tier(a.facts.quota) - tier(b.facts.quota) || headroom(b.facts.quota) - headroom(a.facts.quota) || a.facts.active - b.facts.active || (a.facts.quota.resetsAt ?? Infinity) - (b.facts.quota.resetsAt ?? Infinity) || (a.facts.lastUsedAt ?? 0) - (b.facts.lastUsedAt ?? 0) || a.index - b.index);
-  return { ranked: ranked.map(({ index: _index, ...entry }) => entry), skipped };
-}
-
-// src/pools/service.ts
 var STORAGE_KEY = "pools";
 var POOL_STATE_FILE = "pools-state.json";
 var CORE_HOME_LIMIT = 32;
@@ -1920,6 +2165,10 @@ var PoolService = class {
   }
   homeOf(id) {
     return join3(this.dataDir, "pools", id);
+  }
+  /** CanvasTTY sends card events (sessions.subscribe answered), so a running card can be counted until it ends. */
+  get receivesCardEvents() {
+    return this.cardEvents;
   }
   find(id) {
     return this.settings.accounts.find((account) => account.id === id);
@@ -2543,6 +2792,113 @@ function summarize(skipped) {
   return [...groups].sort((a, b) => b[1].length - a[1].length).map(([reason, labels]) => `${labels.length} ${reason} (${labels.slice(0, 5).join(", ")}${labels.length > 5 ? ", \u2026" : ""})`).join("; ");
 }
 
+// src/plans/service.ts
+var RESERVATION_MS2 = 6e4;
+var MAX_SESSIONS = 4096;
+var PlanPool = class {
+  now;
+  /** Session id -> plan account the card runs on. */
+  sessions = /* @__PURE__ */ new Map();
+  /** Cards running now (released on exit or close; counted only when CanvasTTY sends card events). */
+  running = /* @__PURE__ */ new Set();
+  reservations = /* @__PURE__ */ new Map();
+  lastUsed = /* @__PURE__ */ new Map();
+  cardEvents;
+  constructor(options) {
+    this.now = options.now ?? Date.now;
+    this.cardEvents = options.cardEvents;
+  }
+  /** The plan accounts of `provider` (or every plan), in the person's order. */
+  members(accounts, provider) {
+    return accounts.flatMap((account) => {
+      const plan = planOf(account);
+      return plan && (!provider || plan.provider === provider) ? [{ id: account.id, label: account.label, trust: account.trust ?? "unset", account, provider: plan.provider }] : [];
+    });
+  }
+  reserved(accountId) {
+    const now = this.now();
+    const list = (this.reservations.get(accountId) ?? []).filter((until) => until > now);
+    if (list.length) this.reservations.set(accountId, list);
+    else this.reservations.delete(accountId);
+    return list.length;
+  }
+  runningOn(accountId, except) {
+    let count = 0;
+    for (const session of this.running) if (session !== except && this.sessions.get(session) === accountId) count++;
+    return count;
+  }
+  active(accountId, except) {
+    return this.runningOn(accountId, except) + this.reserved(accountId);
+  }
+  facts(member, key, quota, except) {
+    return { signIn: key === "ok" ? "signed-in" : "signed-out", quota, active: this.active(member.id, except), lastUsedAt: this.lastUsed.get(member.id) ?? null, capacity: concurrencyOf(member.account) };
+  }
+  /**
+   * The members a launch may use, best first, and the others with the reason: no key (or one saved for another host),
+   * quota used up, the person's card limit reached, a data level below the task's in strict mode.
+   */
+  rank(members, fact, request = {}) {
+    const keyless = [];
+    const keyed = [];
+    const known = /* @__PURE__ */ new Map();
+    for (const member of members) {
+      const value = fact(member);
+      known.set(member.id, value);
+      if (value.key === "ok") keyed.push(member);
+      else keyless.push({ account: member, reason: value.key === "missing" ? "no key is saved for it (Accounts settings)" : "its key was saved for another address; the person must save it again" });
+    }
+    const result = rankPool(keyed, (member) => this.facts(member, "ok", known.get(member.id).quota, request.except), {
+      ...request.dataClass ? { dataClass: request.dataClass } : {},
+      ...request.mode ? { mode: request.mode } : {}
+    });
+    return { ranked: result.ranked, skipped: [...keyless, ...result.skipped] };
+  }
+  /** A pick handed out (pick_account): counted for a minute so parallel picks spread over the accounts. */
+  reserve(accountId) {
+    this.reservations.set(accountId, [...this.reservations.get(accountId) ?? [], this.now() + RESERVATION_MS2]);
+  }
+  /** The launch a pick was for: its reservation is used up. */
+  consume(accountId) {
+    const list = this.reservations.get(accountId);
+    if (list?.length) list.shift();
+  }
+  earlier(sessionId) {
+    return this.sessions.get(sessionId);
+  }
+  /** A card was prepared on the account. */
+  started(sessionId, accountId) {
+    this.sessions.set(sessionId, accountId);
+    if (this.sessions.size > MAX_SESSIONS) this.sessions.delete(this.sessions.keys().next().value);
+    if (this.cardEvents()) this.running.add(sessionId);
+    this.lastUsed.set(accountId, this.now());
+  }
+  /** `canvastty.sessions.event`. */
+  sessionEvent(params) {
+    const event = params && typeof params === "object" ? params : {};
+    const session = event.session && typeof event.session === "object" ? event.session : {};
+    if (typeof session.id !== "string" || event.type !== "exited" && event.type !== "closed") return;
+    this.running.delete(session.id);
+    if (event.type === "closed") this.sessions.delete(session.id);
+  }
+  forget(accountId) {
+    this.reservations.delete(accountId);
+    this.lastUsed.delete(accountId);
+    for (const [session, id] of this.sessions) if (id === accountId) {
+      this.sessions.delete(session);
+      this.running.delete(session);
+    }
+  }
+};
+function summarizeSkipped(skipped) {
+  if (!skipped.length) return "none is set up";
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of skipped) {
+    const key = entry.reason.replace(/\s*\(.*\)$/u, "").replace(/^\d+ cards already run on it$/u, "at the card limit the person set").trim();
+    groups.set(key, [...groups.get(key) ?? [], entry.account.label]);
+  }
+  return [...groups].sort((a, b) => b[1].length - a[1].length).map(([reason, labels]) => `${labels.length} ${reason} (${labels.slice(0, 4).join(", ")}${labels.length > 4 ? ", \u2026" : ""})`).join("; ");
+}
+
 // src/service/accounts.ts
 var STORAGE_KEY2 = "accounts";
 var SHARE_ROUTES_BUDGET_MS = 3500;
@@ -2576,6 +2932,8 @@ var AccountsService = class {
   quota;
   /** Subscription account pools: the person's own sign-ins, several per agent (pools/service.ts). */
   pools;
+  /** Coding-plan pools (pool:glm, pool:minimax) over the plan accounts (plans/service.ts). */
+  plans;
   /** Default logins CanvasTTY saw used up, per agent, until their reset (memory only). */
   defaultSignIns = /* @__PURE__ */ new Map();
   /** The last model account rows a shared read listed (answers a read whose checks run late). */
@@ -2611,6 +2969,12 @@ var AccountsService = class {
       ...options.now ? { now: options.now } : {},
       ...options.random ? { random: options.random } : {}
     });
+    this.plans = new PlanPool({ ...options.now ? { now: options.now } : {}, cardEvents: () => this.pools.receivesCardEvents });
+  }
+  /** `canvastty.sessions.event`: pool sign-ins and plan accounts count their running cards. */
+  sessionEvent(params) {
+    this.pools.sessionEvent(params);
+    this.plans.sessionEvent(params);
   }
   apply(value) {
     const saved = value && typeof value === "object" ? value : {};
@@ -2681,7 +3045,43 @@ var AccountsService = class {
       const view = this.quota.view(account);
       if (view) quota[account.id] = { ...routeQuota(view), readable: quotaUrlOf(account) !== null, events: this.quota.events(account.id).slice(-5) };
     }
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view() };
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView() };
+  }
+  plansView() {
+    const accounts = {};
+    for (const account of this.settings.accounts) {
+      const plan = planOf(account);
+      if (plan) accounts[account.id] = { provider: plan.provider, region: plan.region, host: plan.host, running: this.plans.runningOn(account.id), concurrency: concurrencyOf(account) };
+    }
+    return {
+      providers: PLAN_PROVIDERS.map((provider) => ({ provider, label: PLAN_INFO[provider].label, regions: ["intl", "cn"].map((region) => ({ region, ...PLAN_INFO[provider].regions[region] })) })),
+      accounts
+    };
+  }
+  /**
+   * «Add subscription» for a coding plan: the account on the plan's own host for the region the person chose. The
+   * data level is the person's answer, asked on add (`unset` is an answer, a missing one is not); the page then writes
+   * the key into the plugin's secrets and binds it to this host (keyChanged).
+   */
+  async planAdd(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    if (!isPlanProvider(values.provider)) throw new Error("Choose GLM Coding Plan or MiniMax Coding Plan.");
+    if (!isPlanRegion(values.region)) throw new Error("Choose the plan's region.");
+    if (values.trust === void 0) throw new Error('Choose how far you trust this account (or "Not set" to decide later).');
+    const provider = values.provider;
+    const label = typeof values.label === "string" && values.label.trim() ? values.label.trim() : `${PLAN_INFO[provider].label} ${this.plans.members(this.settings.accounts, provider).length + 1}`;
+    const taken = /* @__PURE__ */ new Set([...this.settings.accounts.map((account2) => account2.id), ...this.pools.settings.accounts.map((account2) => account2.id)]);
+    const account = newPlanAccount({
+      id: newAccountId(`${provider}-${label}`, taken),
+      provider,
+      region: values.region,
+      label,
+      trust: values.trust,
+      ...values.concurrency !== void 0 ? { concurrency: values.concurrency } : {},
+      ...values.brokerable === true ? { brokerable: true } : {}
+    });
+    await this.save({ version: 1, accounts: [...this.settings.accounts, account] });
+    return { id: account.id };
   }
   async save(value) {
     const next = validateSettings(value);
@@ -2707,6 +3107,7 @@ var AccountsService = class {
       this.keyOrigins = keyOrigins;
       for (const id of [...removed, ...changed]) this.forgetCheck(id);
       for (const id of removed) this.quota.forget(id);
+      for (const id of removed) this.plans.forget(id);
       for (const id of removed) await removeHomes(this.dataDir, id).catch(() => void 0);
       return { saved: true };
     });
@@ -2790,8 +3191,16 @@ var AccountsService = class {
   /** `canvastty.launch.options`: the accounts the person allowed for this agent. */
   launchOptions(provider) {
     const harness = HARNESSES.find((entry) => entry === provider);
-    const models = harness ? this.settings.accounts.filter((account) => account.agents.includes(harness) && harnessSupport(harness, account).ok).map((account) => ({ value: account.id, label: `${account.label} \xB7 ${account.model}` })) : [];
-    return { account: [...models, ...this.pools.launchOptions(provider)] };
+    const models = harness ? this.settings.accounts.filter((account) => this.runsOn(account, harness)).map((account) => ({ value: account.id, label: `${account.label} \xB7 ${account.model}` })) : [];
+    const plans = harness && PLAN_HARNESSES.includes(harness) ? PLAN_PROVIDERS.flatMap((plan) => {
+      const members = this.plans.members(this.settings.accounts, plan);
+      return members.length ? [{ value: `${PLAN_VALUE}${plan}`, label: `${PLAN_INFO[plan].label} pool \xB7 the account with the most room (${members.length})` }] : [];
+    }) : [];
+    return { account: [...models, ...plans, ...this.pools.launchOptions(provider)] };
+  }
+  /** May this account run this agent? A coding-plan account runs Claude Code and OpenCode on the plan's endpoint too. */
+  runsOn(account, harness) {
+    return (planOf(account) ? planHarnesses(account) : account.agents).includes(harness) && harnessSupport(harness, planLaunchAccount(account, harness)).ok;
   }
   /** `canvastty.launch.prepare`. */
   async prepare(context) {
@@ -2806,6 +3215,8 @@ var AccountsService = class {
     } catch (error) {
       return refuse2(errorText2(error));
     }
+    const planPool = accountId.startsWith(PLAN_VALUE) ? accountId.slice(PLAN_VALUE.length) : null;
+    if (planPool !== null && isPlanProvider(planPool)) return this.preparePlan(context, planPool, effortArgs, trust);
     if (this.pools.handles(accountId)) return this.pools.prepare(context, accountId, effort, trust);
     if (accountId === "none") {
       const args = [...effortArgs, ...trust && context.provider === "codex" ? codexTrustArguments([context.cwd]) : []];
@@ -2813,9 +3224,51 @@ var AccountsService = class {
     }
     const account = this.find(accountId);
     if (!account) return refuse2(`Model account ${accountId.slice(0, 40)} no longer exists; choose another one in the launcher.`);
+    if (planOf(account)) {
+      this.plans.consume(account.id);
+      const active = this.plans.active(account.id, context.sessionId);
+      if (context.role === "subagent" && !context.restoring && !context.resume && active >= concurrencyOf(account)) {
+        const plan = planOf(account).provider;
+        return refuse2(`${account.label} already runs ${active} card(s), the most the person allows at once; use pool:${plan} to let the pool choose.`);
+      }
+    }
+    return this.prepareAccount(context, account, effortArgs, trust);
+  }
+  /**
+   * A launch on `pool:glm` / `pool:minimax`: the plan account with the most headroom (exact quota first, then
+   * estimated, unknown; never one without a key, used up or at the person's card limit). A restored or resumed card
+   * keeps the account it ran on while that one still exists.
+   */
+  async preparePlan(context, plan, effortArgs, trust) {
+    const label = PLAN_INFO[plan].label;
+    const harness = HARNESSES.find((entry) => entry === context.provider);
+    if (!harness || !PLAN_HARNESSES.includes(harness)) return refuse2(`The ${label} pool runs Claude Code and OpenCode.`);
+    const members = this.plans.members(this.settings.accounts, plan);
+    if (!members.length) return refuse2(`There are no ${label} accounts; add one in the Accounts settings (Subscription accounts).`);
+    const earlier = context.restoring || context.resume ? this.plans.earlier(context.sessionId) : void 0;
+    const kept = earlier ? members.find((member) => member.id === earlier) : void 0;
+    let account = kept?.account;
+    if (!account) {
+      const { ranked, skipped } = await this.rankPlans(members, { except: context.sessionId });
+      account = ranked[0]?.account.account;
+      if (!account) return refuse2(`No ${label} account can take this card now: ${summarizeSkipped(skipped)}.`);
+    }
+    return this.prepareAccount(context, account, effortArgs, trust);
+  }
+  async rankPlans(members, request = {}) {
+    const keys = /* @__PURE__ */ new Map();
+    await Promise.all(members.map(async (member) => {
+      keys.set(member.id, await this.keyState(member.account).catch(() => "missing"));
+    }));
+    return this.plans.rank(members, (member) => ({ key: keys.get(member.id) ?? "missing", quota: this.quota.view(member.account) ?? viewOf(emptyRecord(), this.clock()) }), request);
+  }
+  async prepareAccount(context, saved, effortArgs, trust) {
+    let account = saved;
     if (context.role === "subagent" && decisionsOnlyAccount(account)) return refuse2(`${account.label} cannot run a subagent: ${DECISIONS_ONLY_REASON}.`);
     const harness = HARNESSES.find((entry) => entry === context.provider);
-    if (!harness || !account.agents.includes(harness)) return refuse2(`${account.label} is not set up for ${HARNESS_LABELS[context.provider] ?? context.provider}.`);
+    const plan = planOf(account);
+    if (!harness || !(plan ? planHarnesses(account) : account.agents).includes(harness)) return refuse2(`${account.label} is not set up for ${HARNESS_LABELS[context.provider] ?? context.provider}.`);
+    if (plan) account = planLaunchAccount(saved, harness);
     const support = harnessSupport(harness, account);
     if (!support.ok) return refuse2(support.reason === "responses-api" ? "Codex needs an endpoint with the OpenAI Responses API." : `${HARNESS_LABELS[harness]} cannot run on this account.`);
     if (context.environment && context.environment.kind !== "worktree") {
@@ -2828,7 +3281,7 @@ var AccountsService = class {
     if (keyed) {
       const key = await this.readKey(account).catch(() => null);
       if (!key) return refuse2(`${account.label} has no key; save one in the Accounts settings.`);
-      if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return refuse2(`The key of ${account.label} was saved for another address; save it again in the Accounts settings.`);
+      if (this.keyOrigins[account.id] !== originOf(saved.baseUrl) || originOf(account.baseUrl) !== originOf(saved.baseUrl)) return refuse2(`The key of ${account.label} was saved for another address; save it again in the Accounts settings.`);
       const problem = apiKeyProblem(key);
       if (problem) return refuse2(`${apiKeyProblemMessage(problem)} (${account.label})`);
       const substitution = harness === "opencode" ? envSubstitutionProblem(key) : null;
@@ -2878,6 +3331,7 @@ var AccountsService = class {
         ...shape ? { ollamaShape: shape } : {},
         baseUrl: account.baseUrl,
         model,
+        ...account.smallModel ? { smallModel: account.smallModel } : {},
         ...keyed ? { secretKey: secretKeyOf(account.id) } : {},
         ...keyValue ? { keyValue } : {},
         providerId: providerIdOf(account.id),
@@ -2891,7 +3345,8 @@ var AccountsService = class {
     }
     contribution.args.push(...effortArgs);
     if (thirdPartyModel(harness, account.baseUrl)) contribution.thirdPartyModel = true;
-    this.quota.used(account);
+    this.quota.used(saved);
+    if (plan) this.plans.started(context.sessionId, saved.id);
     return contribution;
   }
   // ---- what CanvasTTY tells every limits:read plugin ----
@@ -2918,7 +3373,7 @@ var AccountsService = class {
     }
     if (this.pools.noteLimit(accountId, event.provider, at, resetsAt)) return true;
     const account = this.find(accountId);
-    if (!account || !account.agents.includes(event.provider)) return false;
+    if (!account || !(planOf(account) ? planHarnesses(account) : account.agents).includes(event.provider)) return false;
     this.quota.noteLimit(account, { source: "host-activity", at, windows: [], exhausted: { until: resetsAt, code: "limit" } });
     return true;
   }
@@ -2948,7 +3403,7 @@ var AccountsService = class {
     const at = this.clock();
     if (method === "accounts.routes") {
       this.pools.demand(provider);
-      this.quota.demand(this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)));
+      this.quota.demand(this.settings.accounts.filter((account) => !provider || (planOf(account) ? planHarnesses(account) : account.agents).includes(provider)));
       const listing = listRoutes(this.settings.accounts, this.facts(), provider ? { provider } : {}).then((rows2) => {
         this.lastShared = { at: this.clock(), rows: rows2 };
         return rows2;
@@ -2960,8 +3415,9 @@ var AccountsService = class {
       })]).catch(() => null) ?? (this.lastShared ? this.lastShared.rows.filter((row) => !provider || row.provider === provider) : []);
       return {
         at,
-        routes: [...rows, ...this.pools.routes({ ...provider ? { provider } : {}, effort: "default" })].map((row) => shareRow(row)),
+        routes: [...this.planRows(rows), ...this.pools.routes({ ...provider ? { provider } : {}, effort: "default" })].map((row) => shareRow(row)),
         pools: this.pools.summaries(provider ? { provider } : {}),
+        plans: await this.planSummaries(provider),
         defaultSignIns: this.exhaustedDefaults(provider)
       };
     }
@@ -2969,8 +3425,12 @@ var AccountsService = class {
       void this.pools.refreshUsage();
       return {
         at,
-        accounts: this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)).map((account) => {
+        accounts: this.settings.accounts.filter((account) => !provider || (planOf(account) ? planHarnesses(account) : account.agents).includes(provider)).map((account) => {
           const view = this.quota.view(account);
+          const plan = planOf(account);
+          if (plan) {
+            return { accountId: account.id, account: account.label, kind: "subscription", plan: plan.provider, agents: planHarnesses(account), running: this.plans.runningOn(account.id), concurrency: concurrencyOf(account), trust: account.trust ?? "unset", quota: routeQuota(view ?? viewOf(emptyRecord(), at)) };
+          }
           return { accountId: account.id, account: account.label, kind: "model-account", agents: [...account.agents], ...view ? { quota: routeQuota(view) } : {} };
         }),
         poolAccounts: this.pools.view().providers.flatMap((entry) => entry.accounts).filter((member) => !provider || member.provider === provider).map((member) => {
@@ -2988,6 +3448,7 @@ var AccountsService = class {
           };
         }),
         pools: this.pools.summaries(provider ? { provider } : {}),
+        plans: await this.planSummaries(provider),
         defaultSignIns: this.exhaustedDefaults(provider)
       };
     }
@@ -3003,7 +3464,7 @@ var AccountsService = class {
     if (this.unread) return [];
     return this.settings.accounts.flatMap((account) => {
       if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return [];
-      const offer = brokerOfferOf(account, quotaUrlOf(account) !== null);
+      const offer = brokerOfferOf(account, planOf(account) !== null || quotaUrlOf(account) !== null);
       return offer ? [offer] : [];
     });
   }
@@ -3047,6 +3508,79 @@ var AccountsService = class {
       }
     };
   }
+  /**
+   * Coding-plan rows of a listing: a ready row whose account is at the person's card limit is `busy`; with a task's
+   * data class, an account trusted below it is `data-class` in strict mode or keeps a note in warn mode.
+   */
+  planRows(rows, request = {}) {
+    const mode = request.dataClass ? request.mode ?? "warn" : "off";
+    return rows.map((row) => {
+      if (!row.plan || row.state !== "ready") return row;
+      const account = this.find(row.accountId);
+      if (!account) return row;
+      const active = this.plans.active(account.id);
+      if (active >= concurrencyOf(account)) {
+        const { launchOptions: _launch, ...rest } = row;
+        return { ...rest, state: "busy", reason: `${active} cards already run on it (the person allows ${concurrencyOf(account)} at once)` };
+      }
+      if (request.dataClass && mode !== "off" && !covers(account.trust ?? "unset", request.dataClass)) {
+        const level = account.trust && account.trust !== "unset" ? `trusted up to ${account.trust}` : "the person has not set its data level";
+        if (mode === "strict") {
+          const { launchOptions: _launch, ...rest } = row;
+          return { ...rest, state: "data-class", reason: `${level}; this task is ${request.dataClass}` };
+        }
+        return { ...row, reason: `below this task's class ${request.dataClass} (${level}); the person chose to be warned only` };
+      }
+      return row;
+    });
+  }
+  /** Each coding-plan pool with members: free ones, the best one's quota and the lowest trust (for readers). */
+  async planSummaries(provider) {
+    if (provider && !PLAN_HARNESSES.includes(provider)) return [];
+    const order = { unset: -1, D0: 0, D1: 1, D2: 2, D3: 3 };
+    const out = [];
+    for (const plan of PLAN_PROVIDERS) {
+      const members = this.plans.members(this.settings.accounts, plan);
+      if (!members.length) continue;
+      const { ranked } = await this.rankPlans(members);
+      const best = ranked[0];
+      const trust = ranked.reduce((low, entry) => low === null || order[entry.account.trust] < order[low] ? entry.account.trust : low, null) ?? "unset";
+      out.push({
+        plan,
+        label: `${PLAN_INFO[plan].label} pool`,
+        agents: [...PLAN_HARNESSES],
+        members: members.length,
+        ready: ranked.length,
+        busy: members.filter((member) => this.plans.active(member.id) > 0).length,
+        best: best ? { ...routeQuota(best.facts.quota), accountId: best.account.id } : null,
+        trust,
+        launchOptions: { [PLUGIN_ID]: { account: `${PLAN_VALUE}${plan}`, effort: "default", trustFolder: false } }
+      });
+    }
+    return out;
+  }
+  /** The plan account with the most room for this agent now, across the person's plans; reserved for a minute. */
+  async pickPlan(harness, request) {
+    if (request.effort !== "default" && harness !== "claude") return null;
+    const members = this.plans.members(this.settings.accounts).filter((member) => !request.model || member.account.model.toLowerCase().includes(request.model.toLowerCase()));
+    if (!members.length) return null;
+    const { ranked, skipped } = await this.rankPlans(members, { ...request.dataClass ? { dataClass: request.dataClass } : {}, ...request.mode ? { mode: request.mode } : {} });
+    const chosen = ranked[0];
+    if (!chosen) throw new Error(`No coding-plan account is free: ${summarizeSkipped(skipped)}.`);
+    this.plans.reserve(chosen.account.id);
+    const quota = routeQuota(chosen.facts.quota);
+    const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${Math.round((100 - quota.remainingPercent) * 10) / 10}% used, ${quota.remainingPercent}% left (${quota.confidence})`;
+    return {
+      accountId: chosen.account.id,
+      account: chosen.account.label,
+      plan: chosen.account.provider,
+      model: chosen.account.account.model,
+      trust: chosen.account.trust,
+      quota,
+      launchOptions: { [PLUGIN_ID]: { account: chosen.account.id, effort: request.effort, trustFolder: false } },
+      why: `${HARNESS_LABELS[harness]} on the ${PLAN_INFO[chosen.account.provider].label} account ${chosen.account.label}: ${room}, the most room among ${ranked.length} free of ${members.length}` + (chosen.note ? `; ${chosen.note}` : "") + (skipped.length ? `; skipped ${skipped.map((entry) => `${entry.account.label} (${entry.reason})`).join("; ")}` : "") + "."
+    };
+  }
   async tool(name, input) {
     const text2 = (value, max) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : void 0;
     const provider = text2(input.provider, 32);
@@ -3056,13 +3590,13 @@ var AccountsService = class {
     const mode = ["strict", "warn", "off"].find((entry) => entry === input.dataClassMode);
     if (input.dataClass !== void 0 && !dataClass) return { content: "dataClass must be D0, D1, D2 or D3.", isError: true };
     if (name === "list_routes" || name === "pick_account") this.pools.demand(provider);
-    if (name === "list_routes" || name === "pick_account") this.quota.demand(this.settings.accounts.filter((account) => !provider || account.agents.includes(provider)));
+    if (name === "list_routes" || name === "pick_account") this.quota.demand(this.settings.accounts.filter((account) => !provider || (planOf(account) ? planHarnesses(account) : account.agents).includes(provider)));
     if (name === "list_routes") {
       let routes;
       try {
         const checked = checkEffort(effort);
         routes = [
-          ...await listRoutes(this.settings.accounts, this.facts(), { ...provider ? { provider } : {}, ...model ? { model } : {}, ...effort ? { effort } : {} }),
+          ...this.planRows(await listRoutes(this.settings.accounts, this.facts(), { ...provider ? { provider } : {}, ...model ? { model } : {}, ...effort ? { effort } : {} }), { ...dataClass ? { dataClass } : {}, ...mode ? { mode } : {} }),
           // Pool accounts run the agent's own models: a model filter leaves them out.
           ...model ? [] : this.pools.routes({ ...provider ? { provider } : {}, effort: checked, ...dataClass ? { dataClass } : {}, ...mode ? { mode } : {} })
         ];
@@ -3071,7 +3605,7 @@ var AccountsService = class {
       }
       return { content: {
         routes,
-        pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent. Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time.`,
+        pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent, and their coding plans (GLM, MiniMax: rows with "plan"). Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time; a coding-plan account takes several cards at once up to the person's limit, and its pool is {"${PLUGIN_ID}":{"account":"pool:glm"}} or "pool:minimax" for Claude Code and OpenCode.`,
         signIn: "Each agent's own CLI sign-in is not listed here: spawn_agent without launchOptions uses it, and CanvasTTY reports when it does not work.",
         ...this.exhaustedDefaults(provider).length ? { usedUpSignIns: this.exhaustedDefaults(provider).map((entry) => `${entry.provider}'s own sign-in: ${entry.window ?? "a window"} used up${entry.resetsAt ? ` until ${new Date(entry.resetsAt).toISOString()}` : ""}; prefer its pool or an account`) } : {},
         howTo: "Pass a ready route's launchOptions to spawn_agent unchanged (same provider)."
@@ -3089,10 +3623,19 @@ var AccountsService = class {
           poolError = errorText2(error);
         }
       }
+      const harness = HARNESSES.find((entry) => entry === provider);
+      if (source !== "accounts" && harness && PLAN_HARNESSES.includes(harness)) {
+        try {
+          const picked = await this.pickPlan(harness, { effort: checkEffort(effort), ...model ? { model } : {}, ...dataClass ? { dataClass } : {}, ...mode ? { mode } : {} });
+          if (picked) return { content: { ...picked, kind: "subscription", spawn: { provider, launchOptions: picked.launchOptions } } };
+        } catch (error) {
+          poolError = poolError ? `${poolError} ${errorText2(error)}` : errorText2(error);
+        }
+      }
       if (source === "pool") return { content: poolError ?? `There is no ${POOL_INFO[provider]?.label ?? provider} pool.`, isError: true };
       if (poolError && !HARNESSES.includes(provider)) return { content: poolError, isError: true };
       try {
-        const pick = await pickAccount(this.settings.accounts, this.facts(), { provider, ...model ? { model } : {}, ...effort ? { effort } : {} });
+        const pick = await pickAccount(this.settings.accounts.filter((account) => !planOf(account)), this.facts(), { provider, ...model ? { model } : {}, ...effort ? { effort } : {} });
         return { content: { ...pick, spawn: { provider, launchOptions: pick.launchOptions } } };
       } catch (error) {
         return { content: poolError ? `${poolError} ${errorText2(error)}` : errorText2(error), isError: true };
@@ -3102,7 +3645,7 @@ var AccountsService = class {
   }
 };
 function shareRow(row) {
-  const keep = ["provider", "agent", "accountId", "account", "kind", "model", "endpoint", "state", "reason", "launchOptions", "quota", "trust"];
+  const keep = ["provider", "agent", "accountId", "account", "kind", "plan", "model", "endpoint", "state", "reason", "launchOptions", "quota", "trust"];
   return Object.fromEntries(Object.entries(row).filter(([key]) => keep.includes(key)));
 }
 
@@ -3136,7 +3679,7 @@ serve({
   },
   notifications: {
     "canvastty.sessions.event": (params) => {
-      void service().then((accounts) => accounts.pools.sessionEvent(params)).catch(() => void 0);
+      void service().then((accounts) => accounts.sessionEvent(params)).catch(() => void 0);
     },
     "canvastty.limits.changed": (params) => {
       void service().then((accounts) => accounts.pools.limitsChanged(params)).catch(() => void 0);
@@ -3163,6 +3706,7 @@ serve({
     check: async (params) => (await service()).check(params.accountId),
     keyChanged: async (params) => (await service()).keyChanged(params.accountId),
     quotaRead: async (params) => (await service()).readQuota(params.accountId),
+    planAdd: async (params) => (await service()).planAdd(params),
     poolAdd: async (params) => (await service()).poolAdd(params),
     poolSignIn: async (params) => (await service()).poolSignIn(params.accountId),
     poolUpdate: async (params) => (await service()).poolUpdate(params),

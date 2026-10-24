@@ -11,6 +11,7 @@ import { parseOllamaModelRef } from '../shared/ollamaModelRef.ts';
 import { ollamaVersionRefusal, type OllamaDetection } from '../launch/ollama.ts';
 import { PROVIDER_EFFORTS, isEffort } from '../launch/effort.ts';
 import type { QuotaView } from '../quota/model.ts';
+import { planHarnesses, planLaunchAccount, planOf, type PlanProvider } from '../plans/plans.ts';
 
 export const PLUGIN_ID = 'canvastty-accounts';
 
@@ -43,8 +44,10 @@ export interface RouteRow {
   launchOptions?: Record<string, Record<string, string | boolean>>;
   /** The account's subscription quota, when this plugin can know it (unknown is never "used up"). */
   quota?: RouteQuota;
-  /** Pool accounts: the data level the person trusts the account with (`unset`: not chosen yet). */
+  /** Pool and coding-plan accounts: the data level the person trusts the account with (`unset`: not chosen yet). */
   trust?: string;
+  /** Coding-plan accounts (kind `subscription`): the plan whose pool (`pool:<plan>`) the account is in. */
+  plan?: PlanProvider;
 }
 
 /** QuotaView as an orchestrator (and the Assistant's routing) reads it. */
@@ -127,8 +130,10 @@ export function checkEffort(effort: string | undefined): string {
 export async function listRoutes(accounts: readonly Account[], facts: RouteFacts, filter: { provider?: string; model?: string; effort?: string } = {}): Promise<RouteRow[]> {
   const effort = checkEffort(filter.effort);
   // The rows asked for, before anything is probed: an account with none is not checked at all.
+  // A coding-plan account runs Claude Code and OpenCode on the plan's Anthropic endpoint (plans/plans.ts) besides its agents.
   const wanted = accounts.map(account => HARNESSES.filter(harness =>
-    (filter.provider === undefined || filter.provider === harness) && account.agents.includes(harness) && harnessSupport(harness, account).ok
+    (filter.provider === undefined || filter.provider === harness) && (planOf(account) ? planHarnesses(account) : account.agents).includes(harness)
+    && harnessSupport(harness, planLaunchAccount(account, harness)).ok
     && (!filter.model || account.model.toLowerCase().includes(filter.model.toLowerCase()))));
   const evaluated = await mapBounded(accounts, PROBE_CONCURRENCY, (account, index) => wanted[index]!.length ? stateOf(account, facts) : Promise.resolve(null));
   const rows: RouteRow[] = [];
@@ -146,11 +151,12 @@ export async function listRoutes(accounts: readonly Account[], facts: RouteFacts
       // Used up (fresh, with its reset still ahead): skipped like any account that cannot work now. Unknown, stale or
       // probably reset accounts stay ready.
       if (state === 'ready' && quota?.state === 'exhausted') { state = 'quota-exhausted'; reason = `its quota is used up (${quota.note})`; }
+      const plan = planOf(account);
       rows.push({
         provider: harness, agent: HARNESS_LABELS[harness], accountId: account.id, account: account.label,
-        kind: shape === 'local' ? 'ollama' : shape ? 'ollama-cloud' : 'api-key', model: account.model, endpoint: hostOf(account.baseUrl),
+        kind: plan ? 'subscription' : shape === 'local' ? 'ollama' : shape ? 'ollama-cloud' : 'api-key', model: account.model, endpoint: hostOf(planLaunchAccount(account, harness).baseUrl),
         state, ...(reason !== undefined ? { reason } : {}), ...(state === 'ready' ? { launchOptions: launchOptionsFor(account.id, effort) } : {}),
-        ...(quota ? { quota: routeQuota(quota) } : {})
+        ...(quota ? { quota: routeQuota(quota) } : {}), ...(plan ? { plan: plan.provider, trust: account.trust ?? 'unset' } : {})
       });
     }
   });

@@ -203,6 +203,8 @@ export class PoolService {
   }
 
   homeOf(id: string): string { return join(this.dataDir, 'pools', id); }
+  /** CanvasTTY sends card events (sessions.subscribe answered), so a running card can be counted until it ends. */
+  get receivesCardEvents(): boolean { return this.cardEvents; }
   find(id: unknown): PoolAccount | undefined { return this.settings.accounts.find(account => account.id === id); }
   private member(id: string): MemberState {
     let state = this.members.get(id);

@@ -44,7 +44,9 @@ async function fixture(t, { ollama: ollamaOptions } = {}) {
 
 test('the launcher lists the accounts the person allowed for each agent', async (t) => {
   const { service } = await fixture(t);
-  assert.deepEqual(service.launchOptions('claude'), { account: [{ value: 'qwen-local', label: 'Qwen local · qwen3.5:9b' }, { value: 'glm', label: 'GLM · glm-4.6' }] });
+  // The Z.AI account is a GLM Coding Plan account: listed by name and as the plan's pool for Claude Code and OpenCode.
+  assert.deepEqual(service.launchOptions('claude'), { account: [{ value: 'qwen-local', label: 'Qwen local · qwen3.5:9b' }, { value: 'glm', label: 'GLM · glm-4.6' },
+    { value: 'pool:glm', label: 'GLM Coding Plan pool · the account with the most room (1)' }] });
   assert.deepEqual(service.launchOptions('codex').account.map(option => option.value), ['qwen-local']);
   assert.deepEqual(service.launchOptions('qwen'), { account: [] });
   assert.deepEqual(service.launchOptions('terminal'), { account: [] });
@@ -214,10 +216,14 @@ test('orchestrator tools: list_routes says what is ready and why not; pick_accou
   const pick = (await service.tool('pick_account', { provider: 'claude', effort: 'high' })).content;
   assert.equal(pick.accountId, 'qwen-local');
   assert.deepEqual(pick.spawn, { provider: 'claude', launchOptions: { 'canvastty-accounts': { account: 'qwen-local', effort: 'high', trustFolder: false } } });
-  assert.match(pick.why, /skipped GLM \(glm-4\.6\): no key is saved.*Llama \(llama9:1b\): llama9:1b is not installed/);
+  // The GLM account is a coding plan (tried before model accounts): without a key it is skipped there.
+  assert.match(pick.why, /skipped Llama \(llama9:1b\): llama9:1b is not installed/);
+  assert.equal(listed.routes[0].kind, 'subscription');
   secrets['key.glm'] = KEY;
   await service.keyChanged('glm');
-  assert.equal((await service.tool('pick_account', { provider: 'claude' })).content.accountId, 'glm', 'the person\'s order wins once it works');
+  const plan = (await service.tool('pick_account', { provider: 'claude' })).content;
+  assert.deepEqual([plan.accountId, plan.kind, plan.plan], ['glm', 'subscription', 'glm'], 'a working plan account comes before model accounts');
+  assert.equal((await service.tool('pick_account', { provider: 'claude', source: 'accounts' })).content.accountId, 'qwen-local', 'model accounts only');
   assert.equal((await service.tool('pick_account', { provider: 'claude', model: 'qwen' })).content.accountId, 'qwen-local');
   const none = await service.tool('pick_account', { provider: 'kimi' });
   assert.equal(none.isError, true);
@@ -250,7 +256,7 @@ test('orchestrator tools: list_routes checks the effort like pick_account does',
 });
 
 test('routes: accounts are probed a few at a time, in order, and one no agent asked for is not probed', async () => {
-  const accounts = Array.from({ length: 9 }, (_, i) => ({ id: `a${i}`, label: `A${i}`, preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: [i === 8 ? 'opencode' : 'claude'] }));
+  const accounts = Array.from({ length: 9 }, (_, i) => ({ id: `a${i}`, label: `A${i}`, preset: 'custom-anthropic', baseUrl: 'https://llm.example.test/anthropic', model: 'glm-4.6', agents: [i === 8 ? 'opencode' : 'claude'] }));
   let active = 0, most = 0;
   const asked = [];
   const facts = {
@@ -408,7 +414,7 @@ test('OpenRouter accounts: refused for a subagent, still the person\'s own choic
     assert.equal(row.launchOptions, undefined);
     assert.match(row.reason, /Jev's decisions only/);
   }
-  const pick = (await service.tool('pick_account', { provider: 'opencode' })).content;
+  const pick = (await service.tool('pick_account', { provider: 'opencode', source: 'accounts' })).content;
   assert.equal(pick.accountId, 'qwen-local');
   assert.match(pick.why, /skipped OR \(z-ai\/glm-4\.6\): OpenRouter is for Jev's decisions only/);
   // With only OpenRouter accounts there is no route at all.

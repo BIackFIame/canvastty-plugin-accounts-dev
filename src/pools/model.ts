@@ -76,6 +76,8 @@ export interface MemberFacts {
   /** Cards running in the home now, plus picks handed out and not launched yet. */
   active: number;
   lastUsedAt: number | null;
+  /** Cards the account may run at once: 1 for a CLI sign-in (one refresh token), the person's cap for a plan key. */
+  capacity?: number;
 }
 
 export type DataClassMode = 'strict' | 'warn' | 'off';
@@ -86,8 +88,10 @@ export interface PickRequest {
   mode?: DataClassMode;
 }
 
-export interface Ranked { account: PoolAccount; facts: MemberFacts; covers: boolean | null; note?: string }
-export interface Skipped { account: PoolAccount; reason: string }
+/** What ranking needs of an account: a pool sign-in or a coding-plan account. */
+export interface Rankable { id: string; label: string; trust: PoolTrust }
+export interface Ranked<A extends Rankable = PoolAccount> { account: A; facts: MemberFacts; covers: boolean | null; note?: string }
+export interface Skipped<A extends Rankable = PoolAccount> { account: A; reason: string }
 
 export const covers = (trust: PoolTrust, dataClass: DataClass): boolean => trust !== 'unset' && RANK[trust] >= RANK[dataClass];
 
@@ -103,16 +107,20 @@ const headroom = (view: QuotaView): number => view.remainingPercent === null ? -
  * exact quota, estimated, unknown (running low last); most headroom; fewest active; the reset that comes sooner (its
  * quota would be lost otherwise); least recently used; the person's order.
  */
-export function rankPool(members: readonly PoolAccount[], facts: (account: PoolAccount) => MemberFacts, request: PickRequest = {}): { ranked: Ranked[]; skipped: Skipped[] } {
+export function rankPool<A extends Rankable = PoolAccount>(members: readonly A[], facts: (account: A) => MemberFacts, request: PickRequest = {}): { ranked: Ranked<A>[]; skipped: Skipped<A>[] } {
   const mode: DataClassMode = request.dataClass ? request.mode ?? 'warn' : 'off';
-  const ranked: Array<Ranked & { index: number }> = [];
-  const skipped: Skipped[] = [];
+  const ranked: Array<Ranked<A> & { index: number }> = [];
+  const skipped: Skipped<A>[] = [];
   members.forEach((account, index) => {
     const known = facts(account);
     if (known.signIn === 'signed-out') { skipped.push({ account, reason: 'not signed in (sign in again in the Accounts settings)' }); return; }
     if (known.signIn === 'expired') { skipped.push({ account, reason: 'its sign-in expired (sign in again in the Accounts settings)' }); return; }
     if (known.quota.state === 'exhausted') { skipped.push({ account, reason: `its quota is used up (${known.quota.note})` }); return; }
-    if (known.active > 0) { skipped.push({ account, reason: 'a card already runs on it (one card per sign-in, so its refresh token is not used twice)' }); return; }
+    const capacity = known.capacity ?? 1;
+    if (known.active >= capacity) {
+      skipped.push({ account, reason: capacity === 1 ? 'a card already runs on it (one card per sign-in, so its refresh token is not used twice)' : `${known.active} cards already run on it (the person allows ${capacity} at once)` });
+      return;
+    }
     const covered = request.dataClass && mode !== 'off' ? covers(account.trust, request.dataClass) : null;
     if (covered === false && mode === 'strict') {
       skipped.push({ account, reason: account.trust === 'unset' ? `the person has not set its data level; this task is ${request.dataClass}` : `trusted up to ${account.trust}; this task is ${request.dataClass}` });

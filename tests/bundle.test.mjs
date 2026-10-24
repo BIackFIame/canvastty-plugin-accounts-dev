@@ -109,7 +109,7 @@ test('end to end over JSON-RPC: the page saves accounts, the launcher lists them
   const check = await service.request('check', { accountId: 'qwen' });
   assert.equal(check.models[0].name, 'qwen3.5:9b');
   const routes = await service.request('canvastty.tools.call', { tool: 'list_routes', caller: { id: 'o', role: 'orchestrator' }, input: {} });
-  assert.deepEqual(routes.content.routes.map(row => `${row.provider}:${row.accountId}:${row.state}`), ['claude:qwen:ready', 'codex:qwen:ready', 'claude:glm:ready']);
+  assert.deepEqual(routes.content.routes.map(row => `${row.provider}:${row.accountId}:${row.state}`), ['claude:qwen:ready', 'codex:qwen:ready', 'claude:glm:ready', 'opencode:glm:ready']);
 });
 
 test('through CanvasTTY\'s own supervisor and launch pipeline: the launcher list and a prepared launch (CANVASTTY_REPO)', { skip: !process.env.CANVASTTY_REPO }, async (t) => {
@@ -187,6 +187,56 @@ test('through CanvasTTY\'s launch pipeline: OpenCode gets the pinned provider co
   assert.equal(config.small_model, config.model);
   assert.equal(config.model, `${providerId}/qwen3.5:9b:local`);
   await prepared.cleanup();
+});
+
+test('through CanvasTTY\'s launch pipeline: pool:glm and pool:minimax for Claude Code and OpenCode, the key only in the environment (CANVASTTY_REPO)', { skip: !process.env.CANVASTTY_REPO }, async (t) => {
+  const repo = process.env.CANVASTTY_REPO;
+  const { LaunchPipeline } = await import(join(repo, 'src/main/services/LaunchPipeline.ts'));
+  const { PluginServiceSupervisor } = await import(join(repo, 'src/main/services/PluginServiceSupervisor.ts'));
+  const { validatePluginManifest } = await import(join(repo, 'src/main/services/PluginManager.ts'));
+  const checked = validatePluginManifest(manifest);
+  // An account saved earlier with the Z.AI preset, and a MiniMax China plan account: both in their plan pools.
+  const storage = { accounts: { settings: { version: 1, accounts: [
+    { id: 'glm-old', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude'] },
+    { id: 'mm', label: 'MiniMax', preset: 'minimax-anthropic', baseUrl: 'https://api.minimax.cn/anthropic', model: 'MiniMax-M3.1-Flash', agents: ['claude', 'opencode'], trust: 'D1', concurrency: 2 }
+  ] }, keyOrigins: { 'glm-old': 'https://api.z.ai', mm: 'https://api.minimax.cn' } } };
+  const secrets = { 'key.glm-old': `${KEY}-glm`, 'key.mm': `${KEY}-mm` };
+  const supervisor = new PluginServiceSupervisor({
+    command: process.execPath, hostVersion: '9.9.9', locale: () => 'en', stopGraceMs: 300,
+    host: { storageGet: async (_plugin, key) => storage[key] ?? null, storageSet: async (_plugin, key, value) => { storage[key] = value; }, secretGet: async (_plugin, key) => secrets[key] ?? null, emit: () => undefined }
+  });
+  t.after(() => supervisor.dispose());
+  const entryPath = join(root, 'services', 'accounts.mjs');
+  await supervisor.sync([{ pluginId: checked.id, serviceId: 'accounts', root, entryPath, sha256: createHash('sha256').update(readFileSync(entryPath)).digest('hex'),
+    dataDir: join(base, 'core-data-plans'), permissions: checked.permissions }]);
+  const pipeline = new LaunchPipeline({
+    contributors: () => [{ pluginId: checked.id, pluginName: checked.name, serviceId: 'accounts', launch: checked.services[0].launch, secrets: true }],
+    call: (pluginId, serviceId, method, params, timeoutMs) => supervisor.hostCall(pluginId, serviceId, method, params, timeoutMs),
+    secret: async (_plugin, key) => secrets[key] ?? null,
+    runsRoot: join(base, 'runs-plans')
+  });
+  const listed = (await pipeline.fieldOptions(checked.id, 'opencode')).account.map(option => option.value);
+  assert.deepEqual(listed, ['glm-old', 'mm', 'pool:glm', 'pool:minimax']);
+  const launch = (provider, account, session) => pipeline.prepare({ sessionId: session, provider, profile: 'normal', role: 'subagent', cwd: project, restoring: false, resume: false,
+    environment: null, options: pipeline.normalizeOptions(provider, { [checked.id]: { account } }, { delegated: true }) });
+  const claude = await launch('claude', 'pool:glm', 'plan-1');
+  assert.equal(claude.ok, true, claude.reason);
+  assert.equal(claude.env.ANTHROPIC_BASE_URL, 'https://api.z.ai/api/anthropic');
+  assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, `${KEY}-glm`);
+  assert.deepEqual(claude.secrets, [`${KEY}-glm`], 'CanvasTTY masks it for the session');
+  assert.ok(!claude.args.join(' ').includes(KEY));
+  const opencode = await launch('opencode', 'pool:minimax', 'plan-2');
+  assert.equal(opencode.ok, true, opencode.reason);
+  const text = readFileSync(opencode.env.OPENCODE_CONFIG, 'utf8');
+  assert.ok(!text.includes(KEY), 'the config names the variable, not the key');
+  const config = JSON.parse(text);
+  const [providerId] = Object.keys(config.provider);
+  assert.deepEqual(config.enabled_providers, [providerId]);
+  assert.equal(config.provider[providerId].options.baseURL, 'https://api.minimax.cn/anthropic/v1');
+  assert.equal(opencode.env.CTTY_MODEL_API_KEY, `${KEY}-mm`);
+  assert.ok(!opencode.args.join(' ').includes(KEY));
+  await claude.cleanup();
+  await opencode.cleanup();
 });
 
 test('over JSON-RPC: a storage read that fails at start is retried, and nothing is saved over the accounts meanwhile', async (t) => {
