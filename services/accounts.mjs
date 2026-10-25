@@ -290,8 +290,10 @@ function validOllamaModelName(name) {
 // src/plans/models.ts
 var BUNDLED_MODELS = Object.freeze({
   glm: Object.freeze(["glm-5.3", "glm-5.3-flash"]),
-  minimax: Object.freeze(["MiniMax-M3", "MiniMax-M3.1-Flash"])
+  minimax: Object.freeze(["MiniMax-M3.1-Flash", "MiniMax-M3"])
 });
+var MAIN_IS_SMALL = Object.freeze({ glm: false, minimax: true });
+var FORMER_DEFAULTS = Object.freeze({ glm: Object.freeze([]), minimax: Object.freeze(["MiniMax-M3"]) });
 var MAX_MODELS = 64;
 var MAX_ID = 100;
 var FAMILY = Object.freeze({
@@ -360,7 +362,7 @@ function defaultModels(provider, models) {
   const pool = parsed.length ? parsed : BUNDLED_MODELS[provider].map((id) => parseModel(provider, id));
   const mains = pool.filter((model) => !model.small).sort(better);
   const smalls = pool.filter((model) => model.small).sort(better);
-  const main = mains[0] ?? smalls[0];
+  const main = (MAIN_IS_SMALL[provider] ? smalls[0] : void 0) ?? mains[0] ?? smalls[0];
   return { model: main.id, smallModel: (smalls[0] ?? main).id };
 }
 function listed(models, wanted) {
@@ -3319,7 +3321,7 @@ var AccountsService = class {
     for (const [id, origin] of Object.entries(saved.keyOrigins ?? {})) if (typeof origin === "string" && this.find(id)) this.keyOrigins[id] = origin;
     this.modelNotices = loadNotices(saved.modelNotices).filter((notice) => this.find(notice.accountId));
     const followed = this.followed(this.settings.accounts);
-    if (followed.notices.length) {
+    if (followed.changed) {
       this.settings = { version: 1, accounts: followed.accounts };
       this.modelNotices = [...this.modelNotices, ...followed.notices].slice(-MAX_NOTICES);
       this.followPending = true;
@@ -3336,6 +3338,7 @@ var AccountsService = class {
    */
   followed(accounts) {
     const notices = [];
+    let changed = false;
     const next = accounts.map((account) => {
       const plan = planOf(account);
       const list = plan ? this.models.list(account) : null;
@@ -3344,8 +3347,10 @@ var AccountsService = class {
       const small = account.smallModelPinned ? account.smallModel ?? account.model : list.defaults.smallModel;
       const before = { model: account.model, smallModel: account.smallModel ?? account.model };
       if (before.model === model && before.smallModel === small) return account;
+      changed = true;
       const { smallModel: _small, ...rest } = account;
-      notices.push({
+      const quiet = FORMER_DEFAULTS[plan.provider].includes(before.model) && before.smallModel === small;
+      if (!quiet) notices.push({
         accountId: account.id,
         label: account.label,
         at: this.clock(),
@@ -3355,14 +3360,14 @@ var AccountsService = class {
       });
       return { ...rest, model, ...small !== model ? { smallModel: small } : {} };
     });
-    return { accounts: next, notices };
+    return { accounts: next, notices, changed };
   }
   /** A list changed (read from the host): accounts that follow it take its newest models, saved with a notice. */
   followLists() {
     return this.serialized(async () => {
       if (this.unread) return;
       const followed = this.followed(this.settings.accounts);
-      if (!followed.notices.length && !this.followPending) return;
+      if (!followed.changed && !this.followPending) return;
       const settings = { version: 1, accounts: followed.accounts };
       const notices = [...this.modelNotices, ...followed.notices].slice(-MAX_NOTICES);
       await this.persist({ settings, keyOrigins: this.keyOrigins, modelNotices: notices });
@@ -3370,7 +3375,7 @@ var AccountsService = class {
       this.modelNotices = notices;
       this.followPending = false;
       for (const notice of followed.notices) this.host.log("info", `${notice.accountId}: model ${notice.from.model} -> ${notice.to.model}, small ${notice.from.smallModel} -> ${notice.to.smallModel} (the plan's list)`);
-      if (followed.notices.length) this.host.emit("quota", { accountId: followed.notices[0].accountId, kind: "models", at: this.clock(), note: "model list" });
+      if (followed.changed) this.host.emit("quota", { accountId: followed.notices[0]?.accountId ?? "models", kind: "models", at: this.clock(), note: "model list" });
     });
   }
   /** «OK» on the page's notice: the moves it named are not shown again. */

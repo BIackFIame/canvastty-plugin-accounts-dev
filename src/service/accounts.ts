@@ -21,7 +21,7 @@ import {
 } from '../plans/plans.ts';
 import { PlanPool, summarizeSkipped, type KeyState, type PlanMember } from '../plans/service.ts';
 import { PlanModelReader } from '../plans/modelReader.ts';
-import { listed, olderThanList, sortModels, type PlanModelList } from '../plans/models.ts';
+import { FORMER_DEFAULTS, listed, olderThanList, sortModels, type PlanModelList } from '../plans/models.ts';
 import { matchModel } from '../routes/routes.ts';
 
 /**
@@ -186,7 +186,7 @@ export class AccountsService {
     this.modelNotices = loadNotices(saved.modelNotices).filter(notice => this.find(notice.accountId));
     // Accounts saved before the plans' lists (glm-4.6, MiniMax-M2, …) move to their list's model now; written by load().
     const followed = this.followed(this.settings.accounts);
-    if (followed.notices.length) {
+    if (followed.changed) {
       this.settings = { version: 1, accounts: followed.accounts };
       this.modelNotices = [...this.modelNotices, ...followed.notices].slice(-MAX_NOTICES);
       this.followPending = true;
@@ -201,8 +201,9 @@ export class AccountsService {
    * one. An account saved before this (no choice recorded) cannot say whether the person picked its model, so it
    * follows too, and the page says so (a notice per account changed).
    */
-  private followed(accounts: readonly Account[]): { accounts: Account[]; notices: ModelNotice[] } {
+  private followed(accounts: readonly Account[]): { accounts: Account[]; notices: ModelNotice[]; changed: boolean } {
     const notices: ModelNotice[] = [];
+    let changed = false;
     const next = accounts.map(account => {
       const plan = planOf(account);
       const list = plan ? this.models.list(account) : null;
@@ -211,12 +212,15 @@ export class AccountsService {
       const small = account.smallModelPinned ? account.smallModel ?? account.model : list.defaults.smallModel;
       const before = { model: account.model, smallModel: account.smallModel ?? account.model };
       if (before.model === model && before.smallModel === small) return account;
+      changed = true;
       const { smallModel: _small, ...rest } = account;
-      notices.push({ accountId: account.id, label: account.label, at: this.clock(), from: before, to: { model, smallModel: small },
+      // Off a main model an earlier build chose by default, with the small slot unchanged: no notice of its own.
+      const quiet = FORMER_DEFAULTS[plan.provider].includes(before.model) && before.smallModel === small;
+      if (!quiet) notices.push({ accountId: account.id, label: account.label, at: this.clock(), from: before, to: { model, smallModel: small },
         reason: olderThanList(plan.provider, list.models, before.model) ? 'older' : 'newer' });
       return { ...rest, model, ...(small !== model ? { smallModel: small } : {}) } as Account;
     });
-    return { accounts: next, notices };
+    return { accounts: next, notices, changed };
   }
 
   /** A list changed (read from the host): accounts that follow it take its newest models, saved with a notice. */
@@ -224,7 +228,7 @@ export class AccountsService {
     return this.serialized(async () => {
       if (this.unread) return;
       const followed = this.followed(this.settings.accounts);
-      if (!followed.notices.length && !this.followPending) return;
+      if (!followed.changed && !this.followPending) return;
       const settings: AccountsSettings = { version: 1, accounts: followed.accounts };
       const notices = [...this.modelNotices, ...followed.notices].slice(-MAX_NOTICES);
       await this.persist({ settings, keyOrigins: this.keyOrigins, modelNotices: notices });
@@ -232,7 +236,7 @@ export class AccountsService {
       this.modelNotices = notices;
       this.followPending = false;
       for (const notice of followed.notices) this.host.log('info', `${notice.accountId}: model ${notice.from.model} -> ${notice.to.model}, small ${notice.from.smallModel} -> ${notice.to.smallModel} (the plan's list)`);
-      if (followed.notices.length) this.host.emit('quota', { accountId: followed.notices[0]!.accountId, kind: 'models', at: this.clock(), note: 'model list' });
+      if (followed.changed) this.host.emit('quota', { accountId: followed.notices[0]?.accountId ?? 'models', kind: 'models', at: this.clock(), note: 'model list' });
     });
   }
 

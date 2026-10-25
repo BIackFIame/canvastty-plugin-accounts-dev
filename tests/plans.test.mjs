@@ -232,8 +232,8 @@ test('the launch for Claude Code and OpenCode: plan endpoint, model mapping, key
   const claude = await f.service.prepare(f.context({ options: { account: 'pool:minimax', effort: 'high' } }));
   assert.equal(claude.env.ANTHROPIC_BASE_URL, 'https://api.minimax.cn/anthropic');
   assert.equal(claude.env.ANTHROPIC_API_KEY, '');
-  // MiniMax's list (bundled here): MiniMax-M3 for the main slots, MiniMax-M3.1-Flash (newer, a Flash) for Haiku.
-  assert.equal(claude.env.ANTHROPIC_MODEL, 'MiniMax-M3');
+  // MiniMax runs its newest Flash in every slot (the bundled list here).
+  assert.equal(claude.env.ANTHROPIC_MODEL, 'MiniMax-M3.1-Flash');
   assert.equal(claude.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'MiniMax-M3.1-Flash');
   assert.deepEqual(claude.secretEnv, { ANTHROPIC_AUTH_TOKEN: `key.${id}` });
   assert.equal(claude.thirdPartyModel, true);

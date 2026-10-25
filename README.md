@@ -93,7 +93,8 @@ Models come from each account's own list: the plan's `GET …/models` on the acc
 `/v1/models`; GLM documents none, so its coding endpoint `/api/coding/paas/v4/models` is asked and a missing list falls
 back), read once a day and with *Read now*, else the plugin's built-in list (GLM-5.3 and GLM-5.3-Flash; MiniMax-M3 and
 MiniMax-M3.1-Flash, checked 2026-10-25). Unless you choose a model on the account, it runs the newest on its list (the
-highest version that is not a Flash; the newest Flash for the small slot) and moves to a newer one when it appears.
+highest version that is not a Flash; the newest Flash for the small slot; on MiniMax the newest Flash in every slot) and
+moves to a newer one when it appears.
 Accounts saved with an older model (glm-4.6, MiniMax-M2, …) move to the newest once, and the page says so. The
 launcher's *Model* runs another model of a plan's list for one launch; routes, picks, shared reads and broker offers
 list each plan account's models. GLM quota is read from

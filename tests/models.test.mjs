@@ -87,11 +87,14 @@ test('model lists: only the plan\'s text models are kept, newest first (MiniMax\
 
 test('the newest model: highest version, not a Flash for the main slots, the newest Flash for the small one', () => {
   assert.deepEqual(defaultModels('glm', BUNDLED_MODELS.glm), { model: 'glm-5.3', smallModel: 'glm-5.3-flash' });
-  assert.deepEqual(defaultModels('minimax', BUNDLED_MODELS.minimax), { model: 'MiniMax-M3', smallModel: 'MiniMax-M3.1-Flash' });
+  // MiniMax (per plan): its newest Flash runs the main slots too.
+  assert.deepEqual(defaultModels('minimax', BUNDLED_MODELS.minimax), { model: 'MiniMax-M3.1-Flash', smallModel: 'MiniMax-M3.1-Flash' });
   // A newer model appears: it is the default, with no plugin update.
   assert.deepEqual(defaultModels('glm', ['glm-5.3', 'glm-5.3-flash', 'glm-6', 'glm-6-flash']), { model: 'glm-6', smallModel: 'glm-6-flash' });
   assert.deepEqual(defaultModels('glm', ['glm-5.3', 'glm-5.3-flash', 'glm-6']), { model: 'glm-6', smallModel: 'glm-5.3-flash' });
-  assert.deepEqual(defaultModels('minimax', ['MiniMax-M3', 'MiniMax-M3.1-Flash', 'MiniMax-M3.5']), { model: 'MiniMax-M3.5', smallModel: 'MiniMax-M3.1-Flash' });
+  assert.deepEqual(defaultModels('minimax', ['MiniMax-M3', 'MiniMax-M3.1-Flash', 'MiniMax-M3.5']), { model: 'MiniMax-M3.1-Flash', smallModel: 'MiniMax-M3.1-Flash' });
+  assert.deepEqual(defaultModels('minimax', ['MiniMax-M3', 'MiniMax-M3.1-Flash', 'MiniMax-M3.5-Flash']), { model: 'MiniMax-M3.5-Flash', smallModel: 'MiniMax-M3.5-Flash' }, 'a newer Flash: both slots');
+  assert.deepEqual(defaultModels('minimax', ['MiniMax-M3', 'MiniMax-M4']), { model: 'MiniMax-M4', smallModel: 'MiniMax-M4' }, 'no Flash on the list: the newest model');
   // At one version the plain id wins over variants; previews never become the default.
   assert.deepEqual(defaultModels('glm', ['glm-5.3-prime', 'glm-5.3', 'glm-5.3-flashx', 'glm-5.3-flash', 'glm-7-preview']), { model: 'glm-5.3', smallModel: 'glm-5.3-flash' });
   assert.deepEqual(defaultModels('glm', ['glm-4.5', 'glm-4.5-air', 'glm-4.6']), { model: 'glm-4.6', smallModel: 'glm-4.5-air' });
@@ -105,7 +108,7 @@ test('the newest model: highest version, not a Flash for the main slots, the new
   assert.equal(matchModel(['glm-5.3', 'glm-5.3-flash'], 'flash'), 'glm-5.3-flash');
   assert.equal(matchModel(['glm-5.3', 'glm-5.3-flash'], 'GLM-5.3'), 'glm-5.3');
   // New plan accounts start from the bundled defaults.
-  assert.deepEqual([PLAN_INFO.glm.model, PLAN_INFO.glm.smallModel, PLAN_INFO.minimax.model, PLAN_INFO.minimax.smallModel], ['glm-5.3', 'glm-5.3-flash', 'MiniMax-M3', 'MiniMax-M3.1-Flash']);
+  assert.deepEqual([PLAN_INFO.glm.model, PLAN_INFO.glm.smallModel, PLAN_INFO.minimax.model, PLAN_INFO.minimax.smallModel], ['glm-5.3', 'glm-5.3-flash', 'MiniMax-M3.1-Flash', 'MiniMax-M3.1-Flash']);
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -141,7 +144,7 @@ test('the list is read on the account\'s own host with its key only (OpenAI GET 
   const state = await f.service.state();
   assert.equal(state.models.g.source, 'live');
   assert.deepEqual(state.models.m.models, ['MiniMax-M3.1-Flash', 'MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.5']);
-  assert.deepEqual(state.models.m.defaults, { model: 'MiniMax-M3', smallModel: 'MiniMax-M3.1-Flash' });
+  assert.deepEqual(state.models.m.defaults, { model: 'MiniMax-M3.1-Flash', smallModel: 'MiniMax-M3.1-Flash' });
   // Saved per account with when it was read; no key in the file.
   await f.service.models.flush();
   const file = await readFile(join(f.dataDir, MODELS_FILE), 'utf8');
@@ -254,20 +257,20 @@ test('migration: plan accounts saved with old models move to the newest ones, sa
   const f = await fixture(t, { saved, network: false });
   const byId = id => f.service.settings.accounts.find(account => account.id === id);
   assert.deepEqual([byId('glm-old').model, byId('glm-old').smallModel], ['glm-5.3', 'glm-5.3-flash']);
-  assert.deepEqual([byId('mm-old').model, byId('mm-old').smallModel], ['MiniMax-M3', 'MiniMax-M3.1-Flash']);
-  assert.deepEqual([byId('mm-plan').model, byId('mm-plan').smallModel], ['MiniMax-M3', 'MiniMax-M3.1-Flash'], 'the earlier plan default is not a choice');
+  assert.deepEqual([byId('mm-old').model, byId('mm-old').smallModel], ['MiniMax-M3.1-Flash', undefined], 'one model in both slots');
+  assert.deepEqual([byId('mm-plan').model, byId('mm-plan').smallModel], ['MiniMax-M3.1-Flash', undefined], 'already the plan default: unchanged');
   assert.deepEqual([byId('glm-kept').model, byId('glm-kept').smallModel], ['glm-4.5', 'glm-5.3-flash'], 'the chosen model stays; its small slot follows');
   assert.equal(byId('or').model, 'z-ai/glm-4.6', 'not a plan account: untouched');
   // Written by load(), with one notice per account moved.
   assert.deepEqual(f.storage.accounts.settings.accounts.find(account => account.id === 'glm-old').model, 'glm-5.3');
   const notices = (await f.service.state()).modelNotices;
   assert.deepEqual(notices.map(notice => [notice.accountId, notice.from.model, notice.to.model, notice.reason]), [
-    ['glm-old', 'glm-4.6', 'glm-5.3', 'older'], ['mm-old', 'MiniMax-M2', 'MiniMax-M3', 'older'], ['mm-plan', 'MiniMax-M3.1-Flash', 'MiniMax-M3', 'newer'], ['glm-kept', 'glm-4.5', 'glm-4.5', 'older']
+    ['glm-old', 'glm-4.6', 'glm-5.3', 'older'], ['mm-old', 'MiniMax-M2', 'MiniMax-M3.1-Flash', 'older'], ['glm-kept', 'glm-4.5', 'glm-4.5', 'older']
   ]);
   // A restart does not say it again; «OK» clears it for good.
   const restarted = f.make(f.storage.accounts);
   await restarted.load();
-  assert.equal((await restarted.state()).modelNotices.length, 4, 'shown until dismissed, not repeated');
+  assert.equal((await restarted.state()).modelNotices.length, 3, 'shown until dismissed, not repeated');
   await restarted.modelNoticesSeen();
   assert.deepEqual(f.storage.accounts.modelNotices, []);
   const third = f.make(f.storage.accounts);
@@ -292,7 +295,27 @@ test('migration: plan accounts saved with old models move to the newest ones, sa
   // Moving a plan account off the plan's host drops its plan slots instead of refusing.
   await third.save({ version: 1, accounts: third.settings.accounts.map(account => account.id === 'mm-old' ? { ...account, preset: 'custom-anthropic', baseUrl: 'https://proxy.example.test/anthropic' } : account) });
   const moved = third.settings.accounts.find(account => account.id === 'mm-old');
-  assert.deepEqual([moved.model, moved.smallModel], ['MiniMax-M3', undefined]);
+  assert.deepEqual([moved.model, moved.smallModel], ['MiniMax-M3.1-Flash', undefined]);
+});
+
+test('MiniMax accounts an earlier build moved to MiniMax-M3 go to MiniMax-M3.1-Flash without a new notice; a chosen M3 stays', async (t) => {
+  // As the previous build left them: moved off MiniMax-M2 to MiniMax-M3 with its notice still shown, and one person's pick.
+  const earlier = { at: NOW - H, from: { model: 'MiniMax-M2', smallModel: 'MiniMax-M2' }, to: { model: 'MiniMax-M3', smallModel: 'MiniMax-M3.1-Flash' }, reason: 'older' };
+  const saved = { settings: { version: 1, accounts: [
+    { id: 'mm-auto', label: 'MM auto', preset: 'minimax-anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3', smallModel: 'MiniMax-M3.1-Flash', agents: ['claude'] },
+    { id: 'mm-mine', label: 'MM mine', preset: 'minimax-anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3', smallModel: 'MiniMax-M3.1-Flash', agents: ['claude'], modelPinned: true },
+    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', smallModel: 'glm-5.3-flash', agents: ['claude'] }
+  ] }, keyOrigins: {}, modelNotices: [{ accountId: 'mm-auto', label: 'MM auto', ...earlier }] };
+  const f = await fixture(t, { saved, network: false });
+  const byId = id => f.service.settings.accounts.find(account => account.id === id);
+  assert.deepEqual([byId('mm-auto').model, byId('mm-auto').smallModel], ['MiniMax-M3.1-Flash', undefined]);
+  assert.deepEqual([byId('mm-mine').model, byId('mm-mine').smallModel], ['MiniMax-M3', 'MiniMax-M3.1-Flash'], 'the person\'s pick stays');
+  assert.deepEqual([byId('glm').model, byId('glm').smallModel], ['glm-5.3', 'glm-5.3-flash'], 'GLM\'s rule is unchanged');
+  // Written by load(), and only the earlier notice is shown.
+  assert.equal(f.storage.accounts.settings.accounts.find(account => account.id === 'mm-auto').model, 'MiniMax-M3.1-Flash');
+  assert.deepEqual((await f.service.state()).modelNotices.map(notice => [notice.accountId, notice.to.model]), [['mm-auto', 'MiniMax-M3']]);
+  const claude = await f.service.prepare(f.context({ options: { account: 'mm-auto' } }));
+  assert.match(claude.refuse?.reason ?? '', /no key/, 'no key in this fixture');
 });
 
 test('a newer model on the account\'s list: accounts that follow the list take it at once (with a notice), chosen ones do not', async (t) => {

@@ -23,13 +23,23 @@
  * The default: the newest stable model that is not a small variant for the main slots, the newest small variant
  * (Flash, Air, …) for Claude Code's Haiku slot and OpenCode's small_model. "Newest" is the highest version number;
  * at the same version the plain id wins over variants (glm-5.3 over glm-5.3-prime, -flash over -flashx).
+ * Per plan (MAIN_IS_SMALL): MiniMax's main slots also run its newest Flash, the model MiniMax's own Claude Code setup
+ * names (platform.minimax.io/docs/token-plan/opencode) and the one its plans route retired models to (the owner's
+ * choice, 2026-10-25).
  */
 import type { PlanProvider } from './plans.ts';
 
 export const BUNDLED_MODELS: Readonly<Record<PlanProvider, readonly string[]>> = Object.freeze({
   glm: Object.freeze(['glm-5.3', 'glm-5.3-flash']),
-  minimax: Object.freeze(['MiniMax-M3', 'MiniMax-M3.1-Flash'])
+  minimax: Object.freeze(['MiniMax-M3.1-Flash', 'MiniMax-M3'])
 });
+/** Plans whose main slots run the newest small (Flash) model too, while the list has one. */
+const MAIN_IS_SMALL: Readonly<Record<PlanProvider, boolean>> = Object.freeze({ glm: false, minimax: true });
+/**
+ * Main models an earlier build of this plugin chose by default: an account that did not choose a model moves off them
+ * without a notice of its own (the page already said it moved).
+ */
+export const FORMER_DEFAULTS: Readonly<Record<PlanProvider, readonly string[]>> = Object.freeze({ glm: Object.freeze([]), minimax: Object.freeze(['MiniMax-M3']) });
 /** When the bundled list was checked against the providers' pages (shown with it). */
 export const BUNDLED_CHECKED = '2026-10-25';
 
@@ -116,7 +126,7 @@ export function defaultModels(provider: PlanProvider, models: readonly string[])
   const pool = parsed.length ? parsed : BUNDLED_MODELS[provider].map(id => parseModel(provider, id)!);
   const mains = pool.filter(model => !model.small).sort(better);
   const smalls = pool.filter(model => model.small).sort(better);
-  const main = mains[0] ?? smalls[0]!;
+  const main = (MAIN_IS_SMALL[provider] ? smalls[0] : undefined) ?? mains[0] ?? smalls[0]!;
   return { model: main.id, smallModel: (smalls[0] ?? main).id };
 }
 

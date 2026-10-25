@@ -13,8 +13,10 @@
   // src/plans/models.ts
   var BUNDLED_MODELS = Object.freeze({
     glm: Object.freeze(["glm-5.3", "glm-5.3-flash"]),
-    minimax: Object.freeze(["MiniMax-M3", "MiniMax-M3.1-Flash"])
+    minimax: Object.freeze(["MiniMax-M3.1-Flash", "MiniMax-M3"])
   });
+  var MAIN_IS_SMALL = Object.freeze({ glm: false, minimax: true });
+  var FORMER_DEFAULTS = Object.freeze({ glm: Object.freeze([]), minimax: Object.freeze(["MiniMax-M3"]) });
   var BUNDLED_CHECKED = "2026-10-25";
   var MAX_ID = 100;
   var FAMILY = Object.freeze({
@@ -70,7 +72,7 @@
     const pool = parsed.length ? parsed : BUNDLED_MODELS[provider].map((id) => parseModel(provider, id));
     const mains = pool.filter((model) => !model.small).sort(better);
     const smalls = pool.filter((model) => model.small).sort(better);
-    const main = mains[0] ?? smalls[0];
+    const main = (MAIN_IS_SMALL[provider] ? smalls[0] : void 0) ?? mains[0] ?? smalls[0];
     return { model: main.id, smallModel: (smalls[0] ?? main).id };
   }
 
