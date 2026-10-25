@@ -1939,6 +1939,19 @@ var QuotaReader = class {
     const url = quotaUrlOf(account) ?? untracked(account.id);
     this.apply(account.id, observe(this.record(account, url), observation, this.now()));
   }
+  /**
+   * A reading made before the account existed (quick add's region probe on the account's own host): kept as the
+   * account's first read and counted against its hourly read budget like any read.
+   */
+  seed(account, observation) {
+    const url = quotaUrlOf(account);
+    if (!url) return;
+    const now = this.now();
+    this.reads.set(account.id, [...(this.reads.get(account.id) ?? []).filter((at) => now - at < 36e5), observation.at]);
+    const result = observe(this.record(account, url), observation, now);
+    result.record.lastAttemptAt = observation.at;
+    this.apply(account.id, result);
+  }
   /** A limit error text or body for an account (Z.AI codes, MiniMax's usage-limit answers); true when it was one. */
   noteError(account, body) {
     const now = this.now();
@@ -3217,10 +3230,97 @@ var PlanModelReader = class {
   }
 };
 
+// src/plans/probe.ts
+var REQUEST_MS3 = 1e4;
+var MAX_BODY4 = 256 * 1024;
+var PROBE_PATHS = Object.freeze({ glm: ZAI_QUOTA_PATH, minimax: MINIMAX_QUOTA_PATH });
+function limitOf(provider, body, at) {
+  if (provider === "glm") {
+    const limit = parseZaiLimitError(body, at);
+    return limit && limit.kind === "exhausted" ? limitObservation(limit, at) : null;
+  }
+  const found = parseMiniMaxLimitError(body);
+  return found ? { source: "minimax-limit-error", at, windows: [], exhausted: { until: null, code: found.code } } : null;
+}
+async function ask(provider, host, key, fetcher, now) {
+  const url = `https://${host}${PROBE_PATHS[provider]}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_MS3);
+  timer.unref?.();
+  let status = null;
+  try {
+    const response = await fetcher(url, { method: "GET", headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, signal: controller.signal, redirect: "error" });
+    status = response.status;
+    const body = (await response.text()).slice(0, MAX_BODY4);
+    if (status === 401 || status === 403) return { answer: { kind: "refused-key" }, status };
+    const at = now();
+    let json = null;
+    try {
+      json = JSON.parse(body);
+    } catch {
+      json = null;
+    }
+    if (status >= 400) {
+      const observation = limitOf(provider, json ?? body, at);
+      if (observation) return { answer: { kind: "ok", observation }, status };
+      return { answer: { kind: "error", message: `${host} answered HTTP ${status}`, unreachable: status >= 500 }, status };
+    }
+    if (json === null) return { answer: { kind: "error", message: `${host} did not answer with JSON`, unreachable: false }, status };
+    const limited = limitOf(provider, json, at);
+    if (limited) return { answer: { kind: "ok", observation: limited }, status };
+    try {
+      return { answer: { kind: "ok", observation: provider === "glm" ? parseZaiQuota(json, at) : parseMiniMaxQuota(json, at) }, status };
+    } catch (error) {
+      if (error instanceof ZaiQuotaError && error.kind === "auth") return { answer: { kind: "refused-key" }, status };
+      return { answer: { kind: "ok", observation: null }, status };
+    }
+  } catch {
+    return { answer: { kind: "error", message: controller.signal.aborted ? `${host} did not answer in time` : `${host} could not be reached`, unreachable: true }, status };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function probePlanRegion(input) {
+  const { provider, key } = input;
+  const now = input.now ?? Date.now;
+  const info = PLAN_INFO[provider];
+  if (provider === "minimax" && minimaxPayAsYouGoKey(key)) {
+    return { ok: false, reason: "pay-as-you-go", message: "This is a MiniMax pay-as-you-go key (sk-api-\u2026), not a Coding Plan key: it has no plan quota. Add it as a model account (MiniMax preset) instead.", tried: [] };
+  }
+  const regions = input.only ? [input.only] : ["intl", "cn"];
+  const tried = [];
+  for (const region of regions) {
+    const host = info.regions[region].host;
+    const { answer, status } = await ask(provider, host, key, input.fetch, now);
+    tried.push({ region, host, outcome: answer.kind, status });
+    if (answer.kind === "ok") return { ok: true, region, host, observation: answer.observation, tried };
+    if (answer.kind === "error") {
+      const scrubbed = answer.message.split(key).join("[key]");
+      return { ok: false, reason: answer.unreachable ? "unreachable" : "error", message: `${scrubbed}; nothing was saved. Try again, or choose the region under \xAB\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\xBB.`, tried };
+    }
+  }
+  return { ok: false, reason: "key-refused", message: `The key was refused by ${tried.map((entry) => entry.host).join(" and ")}; nothing was saved.`, tried };
+}
+
 // src/service/accounts.ts
+import { createHash as createHash2 } from "node:crypto";
 var STORAGE_KEY2 = "accounts";
+var DEFAULTS_KEY = "defaults";
+var probeSecretKey = (provider) => `probe.${provider}`;
+var ASSISTANT_ID = "canvastty-assistant";
+var MAX_PROBES_PER_HOUR = 40;
+var PLAN_SHORT = { glm: "GLM", minimax: "MiniMax" };
 var SHARE_ROUTES_BUDGET_MS = 3500;
 var PREFLIGHT_BUDGET_MS = 3500;
+var NO_DEFAULTS = Object.freeze({ dataClass: null, dataClassMode: null, autoSeenAt: null });
+function loadDefaults(value) {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    dataClass: DATA_CLASSES.includes(raw.dataClass) ? raw.dataClass : null,
+    dataClassMode: raw.dataClassMode === "strict" || raw.dataClassMode === "warn" || raw.dataClassMode === "off" ? raw.dataClassMode : null,
+    autoSeenAt: typeof raw.autoSeenAt === "number" && Number.isFinite(raw.autoSeenAt) ? raw.autoSeenAt : null
+  };
+}
 var MAX_NOTICES = 24;
 var DEFAULT_MODEL_VALUE = "default";
 var originOf = (url) => {
@@ -3265,12 +3365,23 @@ var AccountsService = class {
   /** The last model account rows a shared read listed (answers a read whose checks run late). */
   lastShared = null;
   clock;
+  /** The network quick add's region probe uses (the quota reader's; none in tests unless given). */
+  probeFetch;
+  defaultsState = null;
+  defaultsWrites = Promise.resolve();
+  probing = /* @__PURE__ */ new Set();
+  probes = /* @__PURE__ */ new Map();
+  /** A probe's reading, kept until the page binds the probed key to the new account (keyChanged re-applies it). */
+  probed = /* @__PURE__ */ new Map();
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
   constructor(options) {
     this.host = options.host;
     this.dataDir = options.dataDir;
     this.transport = options.transport;
     this.clock = options.now ?? Date.now;
+    this.probeFetch = options.quotaFetch ?? (async () => {
+      throw new Error("no network here");
+    });
     this.settings = loadSettings(void 0);
     this.keyOrigins = {};
     this.unread = options.unread === true;
@@ -3459,7 +3570,7 @@ var AccountsService = class {
       const list = this.models.list(account);
       if (list) models[account.id] = list;
     }
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView(), models, modelNotices: [...this.modelNotices] };
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView(), models, modelNotices: [...this.modelNotices], defaults: await this.defaults() };
   }
   plansView() {
     const accounts = {};
@@ -3496,6 +3607,139 @@ var AccountsService = class {
     });
     await this.save({ version: 1, accounts: [...this.settings.accounts, account] });
     return { id: account.id };
+  }
+  // ---- quick add: provider + key, the region found by the plan's own quota read ----
+  /** The defaults (read from storage once; an unreadable record counts as none and is read again next time). */
+  async defaults() {
+    if (this.defaultsState) return this.defaultsState;
+    try {
+      this.defaultsState = loadDefaults(await this.host.callHost("storage.get", { key: DEFAULTS_KEY }));
+      return this.defaultsState;
+    } catch {
+      return { ...NO_DEFAULTS };
+    }
+  }
+  writeDefaults(change) {
+    const run = this.defaultsWrites.then(async () => {
+      const next = change(await this.defaults());
+      await this.host.callHost("storage.set", { key: DEFAULTS_KEY, value: { version: 1, ...next } });
+      this.defaultsState = next;
+      return next;
+    });
+    this.defaultsWrites = run.catch(() => void 0);
+    return run;
+  }
+  /** «Класс данных для новых аккаунтов»: the person's answer, remembered for every account added after it. */
+  async setDefaults(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    if (!DATA_CLASSES.includes(values.dataClass)) throw new Error("Choose D0, D1, D2 or D3.");
+    return this.writeDefaults((current) => ({ ...current, dataClass: values.dataClass }));
+  }
+  /**
+   * The Assistant read these accounts (a shared read the person approved) or sent a request through one: Auto is set
+   * up. With its data-check mode in the read's params, that mode is remembered too (Off: the data class is not asked).
+   * Written at most once an hour unless the mode changed.
+   */
+  noteAssistant(caller, mode) {
+    const pluginId = caller && typeof caller === "object" ? caller.pluginId : void 0;
+    if (pluginId !== ASSISTANT_ID) return;
+    const known = mode === "strict" || mode === "warn" || mode === "off" ? mode : null;
+    const now = this.clock();
+    void this.defaults().then((current) => {
+      if (current.autoSeenAt !== null && now - current.autoSeenAt < 36e5 && (known === null || known === current.dataClassMode)) return;
+      return this.writeDefaults((value) => ({ ...value, autoSeenAt: now, ...known ? { dataClassMode: known } : {} }));
+    }).catch(() => void 0);
+  }
+  /** «GLM 1», «GLM 2», …: the first number not used by this plan's accounts. */
+  planLabel(provider) {
+    const taken = new Set(this.plans.members(this.settings.accounts, provider).map((member) => member.label.toLowerCase()));
+    for (let n = this.plans.members(this.settings.accounts, provider).length + 1; ; n++) if (!taken.has(`${PLAN_SHORT[provider]} ${n}`.toLowerCase())) return `${PLAN_SHORT[provider]} ${n}`;
+  }
+  /**
+   * Quick add «+ GLM» / «+ MiniMax»: the page staged the pasted key in `probe.<plan>`; the plan's own quota read finds
+   * the region (international host first, the China host only when it refused the key; never a model request), and
+   * the account is saved on the host that took the key. Defaults: label «GLM n», 2 cards at once, for Auto on, the
+   * data class the person set once (asked when it is not set, unless their data-check mode is Off). Nothing is saved
+   * when no host takes the key. The page then writes the key for the new account and binds it (keyChanged).
+   */
+  async planQuickAdd(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    if (!isPlanProvider(values.provider)) throw new Error("Choose GLM Coding Plan or MiniMax Coding Plan.");
+    if (values.region !== void 0 && !isPlanRegion(values.region)) throw new Error("Choose the plan's region.");
+    if (values.trust !== void 0 && values.trust !== "unset" && !DATA_CLASSES.includes(values.trust)) throw new Error("Choose how far you trust the account: not set, D0, D1, D2 or D3.");
+    const provider = values.provider;
+    const fail = (reason, message, tried = []) => ({ added: false, reason, message, tried: tried.map(({ host, outcome, status }) => ({ host, outcome, status })) });
+    const defaults = await this.defaults();
+    const trust = values.trust ?? defaults.dataClass ?? (defaults.dataClassMode === "off" ? "unset" : null);
+    if (!trust) return fail("trust-needed", "Choose how far you trust new accounts with data (asked once).");
+    let key;
+    try {
+      const value = await this.host.callHost("secrets.get", { key: probeSecretKey(provider) });
+      key = typeof value === "string" && value ? value : null;
+    } catch {
+      throw new Error("The plugin's secrets are unavailable.");
+    }
+    if (!key) return fail("no-key", "Paste the plan's API key first.");
+    const problem = apiKeyProblem(key);
+    if (problem) return fail("key-format", apiKeyProblemMessage(problem));
+    if (this.probing.has(provider)) return fail("busy", "A key of this plan is being checked already.");
+    const now = this.clock();
+    const hour = (this.probes.get(provider) ?? []).filter((at) => now - at < 36e5);
+    if (hour.length >= MAX_PROBES_PER_HOUR) return fail("budget", `At most ${MAX_PROBES_PER_HOUR} region checks an hour; try again later or choose the region under \xAB\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\xBB.`);
+    this.probing.add(provider);
+    let probe;
+    try {
+      this.probes.set(provider, [...hour, now]);
+      probe = await probePlanRegion({ provider, key, fetch: this.probeFetch, now: this.clock, ...isPlanRegion(values.region) ? { only: values.region } : {} });
+    } finally {
+      this.probing.delete(provider);
+    }
+    if (!probe.ok) return fail(probe.reason, probe.message, probe.tried);
+    const label = typeof values.label === "string" && values.label.trim() ? values.label.trim().slice(0, 60) : this.planLabel(provider);
+    const concurrency = values.concurrency === void 0 ? DEFAULT_CONCURRENCY : values.concurrency;
+    const forAuto = values.brokerable === void 0 ? true : values.brokerable === true;
+    const taken = /* @__PURE__ */ new Set([...this.settings.accounts.map((account2) => account2.id), ...this.pools.settings.accounts.map((account2) => account2.id)]);
+    const account = newPlanAccount({ id: newAccountId(`${provider}-${label}`, taken), provider, region: probe.region, label, trust, concurrency, brokerable: forAuto });
+    await this.save({ version: 1, accounts: [...this.settings.accounts, account] });
+    const saved = this.find(account.id);
+    if (probe.observation) {
+      this.quota.seed(saved, probe.observation);
+      this.probed.set(saved.id, { hash: keyHash(key), observation: probe.observation });
+    }
+    const view = this.quota.view(saved);
+    this.host.log("info", `${saved.id}: added on ${probe.host} (region ${probe.region}, found by the plan's quota read)`);
+    return { added: true, id: saved.id, label: saved.label, provider, region: probe.region, host: probe.host, trust, concurrency, forAuto, autoSeen: defaults.autoSeenAt !== null, quota: view ? routeQuota(view) : null };
+  }
+  /**
+   * «Сменить регион» on a plan account: the person moves it to the plan's other host, and the key saved for it goes
+   * with it (their action is the consent; nothing else ever moves an account or its key between hosts).
+   */
+  async planRegion(params) {
+    const values = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+    if (!isPlanRegion(values.region)) throw new Error("Choose the plan's region.");
+    const region = values.region;
+    return this.serialized(async () => {
+      const account = this.find(values.accountId);
+      const plan = account ? planOf(account) : null;
+      if (!account || !plan) throw new Error("No such plan account.");
+      const host = PLAN_INFO[plan.provider].regions[region].host;
+      if (plan.host === host) return { region, host };
+      const moved = { ...account, baseUrl: `https://${host}${new URL(account.baseUrl).pathname}` };
+      const settings = { version: 1, accounts: this.settings.accounts.map((entry) => entry.id === account.id ? moved : entry) };
+      validateSettings(settings);
+      const keyOrigins = { ...this.keyOrigins };
+      if (keyOrigins[account.id] === originOf(account.baseUrl)) keyOrigins[account.id] = originOf(moved.baseUrl);
+      else delete keyOrigins[account.id];
+      await this.persist({ settings, keyOrigins });
+      this.settings = settings;
+      this.keyOrigins = keyOrigins;
+      this.forgetCheck(account.id);
+      this.quota.forget(account.id);
+      this.models.forget(account.id);
+      this.probed.delete(account.id);
+      this.host.log("info", `${account.id}: moved to ${host} by the person`);
+      return { region, host };
+    });
   }
   async save(value) {
     const next = { version: 1, accounts: this.followed(validateSettings(offPlan(value)).accounts).accounts };
@@ -3541,6 +3785,12 @@ var AccountsService = class {
       this.keyOrigins = keyOrigins;
       this.quota.forget(account.id);
       this.models.forget(account.id);
+      const probed = this.probed.get(account.id);
+      this.probed.delete(account.id);
+      if (probed && keyOrigins[account.id]) {
+        const key = await this.readKey(account).catch(() => null);
+        if (key && keyHash(key) === probed.hash) this.quota.seed(account, probed.observation);
+      }
       void this.models.read(account);
       return null;
     });
@@ -3853,6 +4103,7 @@ var AccountsService = class {
     const inner = values.params && typeof values.params === "object" && !Array.isArray(values.params) ? values.params : {};
     const provider = typeof inner.provider === "string" && /^[a-z0-9-]{1,32}$/u.test(inner.provider) ? inner.provider : void 0;
     const at = this.clock();
+    if (method === "accounts.routes" || method === "accounts.quota") this.noteAssistant(values.caller, inner.dataClassMode);
     if (method === "accounts.routes") {
       this.pools.demand(provider);
       this.quota.demand(this.settings.accounts.filter((account) => !provider || (planOf(account) ? planHarnesses(account) : account.agents).includes(provider)));
@@ -3941,6 +4192,7 @@ var AccountsService = class {
     const account = this.find(values.ref);
     const offer = account && this.keyOrigins[account.id] === originOf(account.baseUrl) ? brokerOfferOf(account, false, this.models.list(account)?.models ?? []) : null;
     if (!account || !offer) return { ok: false, reason: "This account is not offered to other extensions." };
+    this.noteAssistant(values.caller);
     if (typeof values.model !== "string" || !offer.models.includes(values.model)) {
       return { ok: false, reason: offer.models.length > 1 ? `${account.label} runs ${offer.models.slice(0, 8).join(", ")} only.` : `${account.label} runs ${account.model} only.` };
     }
@@ -4127,6 +4379,7 @@ var AccountsService = class {
     return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };
   }
 };
+var keyHash = (key) => createHash2("sha256").update(key).digest("hex");
 function shareRow(row) {
   const keep = ["provider", "agent", "accountId", "account", "kind", "plan", "model", "smallModel", "models", "endpoint", "state", "reason", "launchOptions", "quota", "trust"];
   return Object.fromEntries(Object.entries(row).filter(([key]) => keep.includes(key)));
@@ -4212,6 +4465,9 @@ serve({
     keyChanged: async (params) => (await service()).keyChanged(params.accountId),
     quotaRead: async (params) => (await service()).readQuota(params.accountId),
     planAdd: async (params) => (await service()).planAdd(params),
+    planQuickAdd: async (params) => (await service()).planQuickAdd(params),
+    planRegion: async (params) => (await service()).planRegion(params),
+    setDefaults: async (params) => (await service()).setDefaults(params),
     modelNoticesSeen: async () => (await service()).modelNoticesSeen(),
     poolAdd: async (params) => (await service()).poolAdd(params),
     poolSignIn: async (params) => (await service()).poolSignIn(params.accountId),

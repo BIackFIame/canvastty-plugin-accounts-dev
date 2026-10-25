@@ -78,10 +78,17 @@ Keychain, so type `/logout` in a card on that account first if you want that rem
 ### Coding plans (GLM, MiniMax)
 
 GLM Coding Plan (Z.AI `api.z.ai` or BigModel `open.bigmodel.cn`) and MiniMax Coding Plan (`api.minimax.io` or
-`api.minimax.cn`) sign in with an API key, not a browser. **Add subscription** under the plan in *Subscription accounts*
-asks for a name, the region, the key, the data level (nothing is chosen for you), how many cards may run on the account
-at once (default 2) and whether Auto and other extensions may use it. The key goes into the plugin's secrets, bound to
-the plan's host: it is sent nowhere else. Several accounts of one plan form its pool.
+`api.minimax.cn`) sign in with an API key, not a browser. **Add a subscription** at the top of the page: click **+ GLM**
+or **+ MiniMax**, paste the key, **Add**. The region is found with the plan's own quota read (`/api/monitor/usage/quota/
+limit`, `/v1/token_plan/remains`; never a model request, so no tokens are spent): the international host first, the
+China host only when the international one refused the key (401/403). The page says which host answered and shows the
+first quota reading; when no host takes the key, nothing is saved. The account is named «GLM 1», «GLM 2»…, runs 2 cards
+at once and is offered to Auto; its data level is the one you set once in *Data class for new accounts* (asked inline
+the first time, not asked when the Assistant's data-check mode is Off). The name, region, cards at once, data level and
+*For Auto* can be set under the collapsed *Advanced*. The key goes into the plugin's secrets, bound to the host it was
+found on: it is sent nowhere else, and only *Move to …* on the account moves it to the plan's other host. A MiniMax
+pay-as-you-go key (`sk-api-…`) is not a plan: add it as a model account. Several accounts of one plan form its pool.
+The tiles also add sign-in accounts (Claude Code, Codex, Grok, Kimi) with the same default data level.
 
 *Model account → GLM Coding Plan pool* (`pool:glm`, or `pool:minimax`) runs Claude Code or OpenCode on the account with
 the most quota left, skipping accounts without a key, used up (until their reset) or at their card limit. Both agents

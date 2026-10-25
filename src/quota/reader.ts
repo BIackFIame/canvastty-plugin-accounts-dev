@@ -165,6 +165,20 @@ export class QuotaReader {
     this.apply(account.id, observe(this.record(account, url), observation, this.now()));
   }
 
+  /**
+   * A reading made before the account existed (quick add's region probe on the account's own host): kept as the
+   * account's first read and counted against its hourly read budget like any read.
+   */
+  seed(account: Account, observation: QuotaObservation): void {
+    const url = quotaUrlOf(account);
+    if (!url) return;
+    const now = this.now();
+    this.reads.set(account.id, [...(this.reads.get(account.id) ?? []).filter(at => now - at < 3_600_000), observation.at]);
+    const result = observe(this.record(account, url), observation, now);
+    result.record.lastAttemptAt = observation.at;
+    this.apply(account.id, result);
+  }
+
   /** A limit error text or body for an account (Z.AI codes, MiniMax's usage-limit answers); true when it was one. */
   noteError(account: Account, body: unknown): boolean {
     const now = this.now();

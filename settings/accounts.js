@@ -341,7 +341,32 @@
       modelsMoved: "Plan accounts moved to newer models",
       modelMoved: (notice) => `${notice.label}: ${notice.from.model} \u2192 ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, small ${notice.from.smallModel} \u2192 ${notice.to.smallModel}` : ""}` + (notice.reason === "older" ? " (the old model is older than every model the plan lists now)." : " (a newer model is on the plan's list)."),
       modelsMovedWhy: "No model was chosen for these accounts (or the plugin cannot tell whether one was), so they follow the plan's list. Choose a model on the account to keep it.",
-      ok: "OK"
+      ok: "OK",
+      quickAdd: "Add a subscription",
+      quickLead: "Choose the provider and paste the key: the region, name and limits are filled in; change them under \xABAdvanced\xBB.",
+      tileSignIn: (label) => `${label} (sign-in)`,
+      advanced: "Advanced",
+      regionAuto: "Find it from the key",
+      dataDefault: "Data class for new accounts",
+      dataAsk: "Trust new accounts with data up to (asked once, remembered):",
+      dataChooseFirst: "Choose how far you trust new accounts with data first (asked once).",
+      dataOff: "Data classes are off (the Assistant's data-check mode is Off): new accounts are added without asking.",
+      autoNote: "\xABFor Auto\xBB is on by default; the Assistant has not read these accounts yet, so Accounts cannot tell whether Auto is set up.",
+      grantNote: "The Assistant may use a new account once it is allowed under Settings \u2192 Agents.",
+      findingRegion: "Checking the key with the plan's quota read (no model request)\u2026",
+      found: (region, host2) => `Added. Region found: ${region} \u2014 the key answered on ${host2}.`,
+      signInAdd: "Add and sign in",
+      moveRegion: (label) => `Move to ${label}`,
+      moveRegionNote: (host2) => `the account and its saved key go to ${host2}`,
+      moved: (host2) => `Moved; the key is now sent only to ${host2}.`,
+      quickFail: {
+        "key-refused": (hosts) => hosts.length > 1 ? `The key did not work on ${hosts.join(" or ")}. Nothing was saved.` : `The key did not work on ${hosts[0] ?? ""}. Nothing was saved.`,
+        unreachable: (host2) => `${host2} did not answer, so the key could not be checked. Nothing was saved; try again or choose the region under \xABAdvanced\xBB.`,
+        error: (host2, status2) => `${host2} answered ${status2 === null ? "in an unknown way" : `HTTP ${status2}`}. Nothing was saved; try again or choose the region under \xABAdvanced\xBB.`,
+        "pay-as-you-go": "This is a MiniMax pay-as-you-go key (sk-api-\u2026), not a Coding Plan key: it has no plan quota. Add it as a model account (MiniMax preset) above. Nothing was sent.",
+        busy: "A key of this plan is being checked already.",
+        budget: "Too many checks this hour; try later or choose the region under \xABAdvanced\xBB."
+      }
     },
     ru: {
       title: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043C\u043E\u0434\u0435\u043B\u0435\u0439",
@@ -429,7 +454,32 @@
       modelsMoved: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u0442\u0430\u0440\u0438\u0444\u043E\u0432 \u043F\u0435\u0440\u0435\u0432\u0435\u0434\u0435\u043D\u044B \u043D\u0430 \u0431\u043E\u043B\u0435\u0435 \u043D\u043E\u0432\u044B\u0435 \u043C\u043E\u0434\u0435\u043B\u0438",
       modelMoved: (notice) => `${notice.label}: ${notice.from.model} \u2192 ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, \u043C\u0430\u043B\u0430\u044F ${notice.from.smallModel} \u2192 ${notice.to.smallModel}` : ""}` + (notice.reason === "older" ? " (\u0441\u0442\u0430\u0440\u0430\u044F \u043C\u043E\u0434\u0435\u043B\u044C \u0441\u0442\u0430\u0440\u0448\u0435 \u0432\u0441\u0435\u0445 \u043C\u043E\u0434\u0435\u043B\u0435\u0439, \u043A\u043E\u0442\u043E\u0440\u044B\u0435 \u0442\u0430\u0440\u0438\u0444 \u043F\u0435\u0440\u0435\u0447\u0438\u0441\u043B\u044F\u0435\u0442 \u0441\u0435\u0439\u0447\u0430\u0441)." : " (\u0432 \u0441\u043F\u0438\u0441\u043A\u0435 \u0442\u0430\u0440\u0438\u0444\u0430 \u043F\u043E\u044F\u0432\u0438\u043B\u0430\u0441\u044C \u0431\u043E\u043B\u0435\u0435 \u043D\u043E\u0432\u0430\u044F \u043C\u043E\u0434\u0435\u043B\u044C)."),
       modelsMovedWhy: "\u0414\u043B\u044F \u044D\u0442\u0438\u0445 \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439 \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0432\u044B\u0431\u0438\u0440\u0430\u043B\u0430\u0441\u044C (\u0438\u043B\u0438 \u043F\u043B\u0430\u0433\u0438\u043D \u043D\u0435 \u043C\u043E\u0436\u0435\u0442 \u044D\u0442\u043E \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C), \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043E\u043D\u0438 \u0441\u043B\u0435\u0434\u0443\u044E\u0442 \u0441\u043F\u0438\u0441\u043A\u0443 \u0442\u0430\u0440\u0438\u0444\u0430. \u0427\u0442\u043E\u0431\u044B \u043E\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043C\u043E\u0434\u0435\u043B\u044C, \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0435\u0451 \u0432 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438.",
-      ok: "\u041F\u043E\u043D\u044F\u0442\u043D\u043E"
+      ok: "\u041F\u043E\u043D\u044F\u0442\u043D\u043E",
+      quickAdd: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0434\u043F\u0438\u0441\u043A\u0443",
+      quickLead: "\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043F\u0440\u043E\u0432\u0430\u0439\u0434\u0435\u0440\u0430 \u0438 \u0432\u0441\u0442\u0430\u0432\u044C\u0442\u0435 \u043A\u043B\u044E\u0447: \u0440\u0435\u0433\u0438\u043E\u043D, \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u0438 \u043B\u0438\u043C\u0438\u0442\u044B \u0437\u0430\u043F\u043E\u043B\u043D\u044F\u0442\u0441\u044F \u0441\u0430\u043C\u0438; \u0438\u0437\u043C\u0435\u043D\u0438\u0442\u044C \u0438\u0445 \u043C\u043E\u0436\u043D\u043E \u0432 \xAB\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\xBB.",
+      tileSignIn: (label) => `${label} (\u0432\u0445\u043E\u0434 \u0432 \u0430\u043A\u043A\u0430\u0443\u043D\u0442)`,
+      advanced: "\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E",
+      regionAuto: "\u041E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C \u043F\u043E \u043A\u043B\u044E\u0447\u0443",
+      dataDefault: "\u041A\u043B\u0430\u0441\u0441 \u0434\u0430\u043D\u043D\u044B\u0445 \u0434\u043B\u044F \u043D\u043E\u0432\u044B\u0445 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u043E\u0432",
+      dataAsk: "\u041D\u043E\u0432\u044B\u043C \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430\u043C \u0434\u043E\u0432\u0435\u0440\u044F\u044E \u0434\u0430\u043D\u043D\u044B\u0435 \u0434\u043E (\u0441\u043F\u0440\u043E\u0448\u0443 \u043E\u0434\u0438\u043D \u0440\u0430\u0437 \u0438 \u0437\u0430\u043F\u043E\u043C\u043D\u044E):",
+      dataChooseFirst: "\u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435, \u0434\u043E \u043A\u0430\u043A\u043E\u0433\u043E \u043A\u043B\u0430\u0441\u0441\u0430 \u0434\u043E\u0432\u0435\u0440\u044F\u0442\u044C \u0434\u0430\u043D\u043D\u044B\u0435 \u043D\u043E\u0432\u044B\u043C \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430\u043C (\u0441\u043F\u0440\u0430\u0448\u0438\u0432\u0430\u0435\u0442\u0441\u044F \u043E\u0434\u0438\u043D \u0440\u0430\u0437).",
+      dataOff: "\u041A\u043B\u0430\u0441\u0441\u044B \u0434\u0430\u043D\u043D\u044B\u0445 \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D\u044B (\u0440\u0435\u0436\u0438\u043C \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0438 \u0434\u0430\u043D\u043D\u044B\u0445 \u0432 Assistant \u2014 \xAB\u0412\u044B\u043A\u043B.\xBB): \u043D\u043E\u0432\u044B\u0435 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u044B \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u044E\u0442\u0441\u044F \u0431\u0435\u0437 \u0432\u043E\u043F\u0440\u043E\u0441\u0430.",
+      autoNote: "\xAB\u0414\u043B\u044F Auto\xBB \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E; Assistant \u0435\u0449\u0451 \u043D\u0435 \u0447\u0438\u0442\u0430\u043B \u044D\u0442\u0438 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u044B, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 Accounts \u043D\u0435 \u0432\u0438\u0434\u0438\u0442, \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D \u043B\u0438 Auto.",
+      grantNote: "Assistant \u0441\u043C\u043E\u0436\u0435\u0442 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u044C \u043D\u043E\u0432\u044B\u0439 \u0430\u043A\u043A\u0430\u0443\u043D\u0442, \u043A\u043E\u0433\u0434\u0430 \u043E\u043D \u0440\u0430\u0437\u0440\u0435\u0448\u0451\u043D \u0432 \u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u2192 \u0410\u0433\u0435\u043D\u0442\u044B.",
+      findingRegion: "\u041F\u0440\u043E\u0432\u0435\u0440\u044F\u044E \u043A\u043B\u044E\u0447 \u0447\u0442\u0435\u043D\u0438\u0435\u043C \u043A\u0432\u043E\u0442\u044B \u0442\u0430\u0440\u0438\u0444\u0430 (\u0431\u0435\u0437 \u0437\u0430\u043F\u0440\u043E\u0441\u0430 \u043A \u043C\u043E\u0434\u0435\u043B\u0438)\u2026",
+      found: (region, host2) => `\u0414\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u043E. \u041D\u0430\u0439\u0434\u0435\u043D \u0440\u0435\u0433\u0438\u043E\u043D: ${region} \u2014 \u043A\u043B\u044E\u0447 \u043E\u0442\u0432\u0435\u0442\u0438\u043B \u043D\u0430 ${host2}.`,
+      signInAdd: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0438 \u0432\u043E\u0439\u0442\u0438",
+      moveRegion: (label) => `\u041F\u0435\u0440\u0435\u043D\u0435\u0441\u0442\u0438 \u043D\u0430 ${label}`,
+      moveRegionNote: (host2) => `\u0430\u043A\u043A\u0430\u0443\u043D\u0442 \u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u0439 \u043A\u043B\u044E\u0447 \u043F\u0435\u0440\u0435\u0439\u0434\u0443\u0442 \u043D\u0430 ${host2}`,
+      moved: (host2) => `\u041F\u0435\u0440\u0435\u043D\u0435\u0441\u0435\u043D\u043E; \u043A\u043B\u044E\u0447 \u0442\u0435\u043F\u0435\u0440\u044C \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 ${host2}.`,
+      quickFail: {
+        "key-refused": (hosts) => hosts.length > 1 ? `\u041A\u043B\u044E\u0447 \u043D\u0435 \u043F\u043E\u0434\u043E\u0448\u0451\u043B \u043D\u0438 \u043A ${hosts.join(", \u043D\u0438 \u043A ")}. \u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E.` : `\u041A\u043B\u044E\u0447 \u043D\u0435 \u043F\u043E\u0434\u043E\u0448\u0451\u043B \u043A ${hosts[0] ?? ""}. \u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E.`,
+        unreachable: (host2) => `${host2} \u043D\u0435 \u043E\u0442\u0432\u0435\u0442\u0438\u043B, \u043A\u043B\u044E\u0447 \u043D\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u0435\u043D. \u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E; \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0440\u0435\u0433\u0438\u043E\u043D \u0432 \xAB\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\xBB.`,
+        error: (host2, status2) => `${host2} \u043E\u0442\u0432\u0435\u0442\u0438\u043B ${status2 === null ? "\u043D\u0435\u043F\u043E\u043D\u044F\u0442\u043D\u043E" : `HTTP ${status2}`}. \u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E; \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0440\u0435\u0433\u0438\u043E\u043D \u0432 \xAB\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\xBB.`,
+        "pay-as-you-go": "\u042D\u0442\u043E \u043A\u043B\u044E\u0447 MiniMax \u0441 \u043E\u043F\u043B\u0430\u0442\u043E\u0439 \u043F\u043E \u0444\u0430\u043A\u0442\u0443 (sk-api-\u2026), \u0430 \u043D\u0435 \u043A\u043B\u044E\u0447 Coding Plan: \u043A\u0432\u043E\u0442\u044B \u0442\u0430\u0440\u0438\u0444\u0430 \u0443 \u043D\u0435\u0433\u043E \u043D\u0435\u0442. \u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u0435\u0433\u043E \u0432\u044B\u0448\u0435 \u043A\u0430\u043A \u0443\u0447\u0451\u0442\u043D\u0443\u044E \u0437\u0430\u043F\u0438\u0441\u044C \u043C\u043E\u0434\u0435\u043B\u0438 (\u043F\u0440\u0435\u0441\u0435\u0442 MiniMax). \u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u043B\u043E\u0441\u044C.",
+        busy: "\u041A\u043B\u044E\u0447 \u044D\u0442\u043E\u0433\u043E \u0442\u0430\u0440\u0438\u0444\u0430 \u0443\u0436\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442\u0441\u044F.",
+        budget: "\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u043C\u043D\u043E\u0433\u043E \u043F\u0440\u043E\u0432\u0435\u0440\u043E\u043A \u0437\u0430 \u0447\u0430\u0441; \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u043F\u043E\u0437\u0436\u0435 \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0440\u0435\u0433\u0438\u043E\u043D \u0432 \xAB\u0414\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\xBB."
+      }
     }
   };
   var KEY_PROBLEM = {
@@ -472,9 +522,6 @@
         await host.service.request(SERVICE, "save", { settings: { version: 1, accounts } });
         say(t.saved);
         await load().catch((error) => say(errorText(error)));
-        host.service.onEvent?.((event) => {
-          if (event?.event === "pools" || event?.event === "quota") void load().catch(() => void 0);
-        });
         return true;
       } catch (error) {
         say(`${t.notSaved}${errorText(error)}`);
@@ -716,25 +763,6 @@
       if (!entry.accounts.length) list.append(el("li", { className: "muted", textContent: t.poolNone }));
       for (const member of entry.accounts) list.append(poolMember(member));
       block.append(list);
-      const label = el("input", { name: `pool-label-${entry.provider}`, placeholder: t.name });
-      let trust = null;
-      block.append(
-        el("div", { className: "row" }, field(t.name, label)),
-        el("div", { className: "row" }, el("span", { className: "label", textContent: t.poolTrust }), trustChoice(`pool-new-trust-${entry.provider}`, null, (value) => {
-          trust = value;
-        })),
-        el("div", { className: "row" }, button(t.poolAdd, `pool-add-${entry.provider}`, () => {
-          if (!trust) {
-            say(t.poolChooseTrust);
-            return;
-          }
-          poolRequest("poolAdd", { provider: entry.provider, label: label.value.trim(), trust }).then((answer) => {
-            const signIn = answer.signIn;
-            say(signIn && "error" in signIn ? String(signIn.error) : t.poolSignInOpened);
-            return load();
-          }, (error) => say(`${t.notSaved}${errorText(error)}`));
-        }), el("span", { className: "muted", textContent: entry.signInHint[locale] }))
-      );
       section.append(block);
     }
     if (plans) {
@@ -857,6 +885,21 @@
         })
       )
     );
+    if (info) {
+      const other = info.region === "intl" ? "cn" : "intl";
+      const target = PLAN_INFO[info.provider].regions[other];
+      item.append(el(
+        "div",
+        { className: "row" },
+        button(t.moveRegion(target.label[locale]), `plan-region-${account.id}`, () => {
+          host.service.request(SERVICE, "planRegion", { accountId: account.id, region: other }).then((answer) => {
+            say(t.moved(answer.host));
+            return load();
+          }, (error) => say(`${t.notSaved}${errorText(error)}`));
+        }),
+        el("span", { className: "muted", textContent: t.moveRegionNote(target.host) })
+      ));
+    }
     return item;
   }
   function modelSelect(name, provider, list, newest, pinned) {
@@ -892,55 +935,203 @@
     if (!members.length) list.append(el("li", { className: "muted", textContent: t.poolNone }));
     for (const account of members) list.append(planMember(account));
     block.append(list);
-    const label = el("input", { name: `plan-new-label-${entry.provider}`, placeholder: t.name });
-    const region = el("select", { name: `plan-new-region-${entry.provider}` });
-    for (const option of entry.regions) region.append(el("option", { value: option.region, textContent: option.label[locale] }));
-    const key = el("input", { type: "password", placeholder: t.key, autocomplete: "off", name: `plan-new-key-${entry.provider}` });
-    const cap = el("input", { type: "number", min: "1", max: String(MAX_CONCURRENCY), value: String(DEFAULT_CONCURRENCY), name: `plan-new-concurrency-${entry.provider}` });
-    const auto = el("input", { type: "checkbox", name: `plan-new-auto-${entry.provider}` });
+    return block;
+  }
+  var openTile = null;
+  var inlineClass = null;
+  var DEFAULT_CLASSES = ["D0", "D1", "D2", "D3"];
+  var PROBE_SECRET = (provider) => `probe.${provider}`;
+  async function newAccountClass() {
+    const defaults = state.defaults;
+    if (defaults?.dataClass) return { ok: true, trust: defaults.dataClass };
+    if (defaults?.dataClassMode === "off") return { ok: true };
+    if (!inlineClass) {
+      say(t.dataChooseFirst);
+      return { ok: false };
+    }
+    await host.service.request(SERVICE, "setDefaults", { dataClass: inlineClass });
+    return { ok: true, trust: inlineClass };
+  }
+  function dataDefaultRow() {
+    const defaults = state.defaults;
+    if (defaults?.dataClassMode === "off" && !defaults.dataClass) return el("p", { className: "muted", dataset: { dataDefault: "off" }, textContent: t.dataOff });
+    const current = defaults?.dataClass ?? null;
+    const box = el("span", { className: "agents" });
+    for (const value of DEFAULT_CLASSES) {
+      const input = el("input", { type: "radio", name: "data-default", value, checked: (current ?? inlineClass) === value });
+      input.addEventListener("change", () => {
+        if (!input.checked) return;
+        if (!current) {
+          inlineClass = value;
+          return;
+        }
+        host.service.request(SERVICE, "setDefaults", { dataClass: value }).then(() => {
+          say(t.saved);
+          return load();
+        }, (error) => say(`${t.notSaved}${errorText(error)}`));
+      });
+      box.append(el("label", { className: "check" }, input, ` ${value}`));
+    }
+    return el("div", { className: "row", dataset: { dataDefault: current ?? "ask" } }, el("span", { className: "label", textContent: current ? t.dataDefault : t.dataAsk }), box);
+  }
+  function quickFailText(result) {
+    const last = result.tried.at(-1);
+    switch (result.reason) {
+      case "key-refused":
+        return t.quickFail["key-refused"](result.tried.map((entry) => entry.host));
+      case "unreachable":
+        return t.quickFail.unreachable(last?.host ?? "");
+      case "error":
+        return t.quickFail.error(last?.host ?? "", last?.status ?? null);
+      case "pay-as-you-go":
+        return t.quickFail["pay-as-you-go"];
+      case "busy":
+        return t.quickFail.busy;
+      case "budget":
+        return t.quickFail.budget;
+      case "trust-needed":
+        return t.dataChooseFirst;
+      case "no-key":
+        return t.planKeyFirst;
+      default:
+        return `${t.notSaved}${result.message}`;
+    }
+  }
+  function planQuickForm(provider) {
+    const info = state.plans.providers.find((entry) => entry.provider === provider);
+    const key = el("input", { type: "password", placeholder: t.key, autocomplete: "off", name: `quick-key-${provider}` });
+    const label = el("input", { name: `quick-label-${provider}`, placeholder: t.name });
+    const region = el("select", { name: `quick-region-${provider}` });
+    region.append(el("option", { value: "", textContent: t.regionAuto }));
+    for (const option of info.regions) region.append(el("option", { value: option.region, textContent: option.label[locale] }));
+    const cap = el("input", { type: "number", min: "1", max: String(MAX_CONCURRENCY), value: String(DEFAULT_CONCURRENCY), name: `quick-concurrency-${provider}` });
+    const auto = el("input", { type: "checkbox", checked: true, name: `quick-auto-${provider}` });
     let trust = null;
-    block.append(
-      el("div", { className: "row" }, field(t.name, label), field(t.region, region), field(t.key, key), field(t.concurrency, cap)),
-      el("div", { className: "row" }, el("span", { className: "label", textContent: t.poolTrust }), trustChoice(`plan-new-trust-${entry.provider}`, null, (value) => {
+    const advanced = el(
+      "details",
+      { className: "advanced", dataset: { advanced: provider } },
+      el("summary", { textContent: t.advanced }),
+      el("div", { className: "row" }, field(t.name, label), field(t.region, region), field(t.concurrency, cap)),
+      el("div", { className: "row" }, el("span", { className: "label", textContent: t.poolTrust }), trustChoice(`quick-trust-${provider}`, null, (value) => {
         trust = value;
       })),
-      el("div", { className: "row" }, el("label", { className: "check" }, auto, ` ${t.forAuto}`)),
-      el("div", { className: "row" }, button(t.planAdd, `plan-add-${entry.provider}`, async () => {
-        const value = key.value.trim();
-        if (!value) {
-          say(t.planKeyFirst);
-          return;
-        }
-        const problem = apiKeyProblem(value);
-        if (problem) {
-          key.value = "";
-          say(KEY_PROBLEM[locale][problem] ?? problem);
-          return;
-        }
-        if (!trust) {
-          say(t.poolChooseTrust);
-          return;
-        }
+      el("div", { className: "row" }, el("label", { className: "check" }, auto, ` ${t.forAuto}`))
+    );
+    const add = button(t.add, `quick-add-${provider}`, async () => {
+      const value = key.value.trim();
+      if (!value) {
+        say(t.planKeyFirst);
+        return;
+      }
+      const problem = apiKeyProblem(value);
+      if (problem) {
+        key.value = "";
+        say(KEY_PROBLEM[locale][problem] ?? problem);
+        return;
+      }
+      add.disabled = true;
+      try {
+        const chosen = trust ? { ok: true, trust } : await newAccountClass();
+        if (!chosen.ok) return;
+        say(t.findingRegion);
+        await host.secrets.set(PROBE_SECRET(provider), value);
+        let result;
         try {
-          const { id } = await host.service.request(SERVICE, "planAdd", {
-            provider: entry.provider,
-            region: region.value,
-            label: label.value.trim(),
-            trust,
+          result = await host.service.request(SERVICE, "planQuickAdd", {
+            provider,
+            ...region.value ? { region: region.value } : {},
+            ...label.value.trim() ? { label: label.value.trim() } : {},
+            ...chosen.trust ? { trust: chosen.trust } : {},
             concurrency: Number(cap.value),
             brokerable: auto.checked
           });
-          await host.secrets.set(secretKeyOf(id), value);
+          if (!result.added) {
+            say(quickFailText(result));
+            await load().catch(() => void 0);
+            return;
+          }
+          await host.secrets.set(secretKeyOf(result.id), value);
           key.value = "";
-          await host.service.request(SERVICE, "keyChanged", { accountId: id });
-          say(t.keySaved);
-        } catch (error) {
-          say(`${t.notSaved}${errorText(error)}`);
+          await host.service.request(SERVICE, "keyChanged", { accountId: result.id });
+        } finally {
+          await host.secrets.delete(PROBE_SECRET(provider)).catch(() => void 0);
         }
+        const regionLabel = PLAN_INFO[provider].regions[result.region].label[locale];
+        const quota = result.quota && result.quota.remainingPercent !== null ? ` ${t.quota}: ${t.left(result.quota.remainingPercent, result.quota.window)}.` : "";
+        const autoLine = result.forAuto ? ` ${result.autoSeen ? "" : `${t.autoNote} `}${t.grantNote}` : "";
+        openTile = null;
+        inlineClass = null;
         await load().catch((error) => say(errorText(error)));
+        say(`${t.found(regionLabel, result.host)}${quota}${autoLine}`);
+      } catch (error) {
+        say(`${t.notSaved}${errorText(error)}`);
+      } finally {
+        add.disabled = false;
+      }
+    });
+    return el("div", { className: "add", dataset: { quick: provider } }, el("div", { className: "row" }, field(t.key, key), add), advanced);
+  }
+  function poolQuickForm(provider, hint) {
+    const label = el("input", { name: `quick-label-${provider}`, placeholder: t.name });
+    let trust = null;
+    const advanced = el(
+      "details",
+      { className: "advanced", dataset: { advanced: provider } },
+      el("summary", { textContent: t.advanced }),
+      el("div", { className: "row" }, field(t.name, label)),
+      el("div", { className: "row" }, el("span", { className: "label", textContent: t.poolTrust }), trustChoice(`quick-trust-${provider}`, null, (value) => {
+        trust = value;
       }))
     );
-    return block;
+    const add = button(t.signInAdd, `quick-add-${provider}`, async () => {
+      add.disabled = true;
+      try {
+        const chosen = trust ? { ok: true, trust } : await newAccountClass();
+        if (!chosen.ok) return;
+        const answer = await poolRequest("poolAdd", { provider, label: label.value.trim(), trust: chosen.trust ?? "unset" });
+        openTile = null;
+        inlineClass = null;
+        await load().catch((error) => say(errorText(error)));
+        say(answer.signIn && "error" in answer.signIn ? String(answer.signIn.error) : t.poolSignInOpened);
+      } catch (error) {
+        say(`${t.notSaved}${errorText(error)}`);
+      } finally {
+        add.disabled = false;
+      }
+    });
+    return el("div", { className: "add", dataset: { quick: provider } }, el("div", { className: "row" }, add, el("span", { className: "muted", textContent: hint })), advanced);
+  }
+  function quickAddSection() {
+    const tiles = [
+      ...(state.plans?.providers ?? []).map((entry) => ({ kind: "plan", provider: entry.provider })),
+      ...(state.pools?.providers ?? []).map((entry) => ({ kind: "pool", provider: entry.provider, label: entry.label }))
+    ];
+    const defaults = state.defaults;
+    const section = el("section", { className: "quick", dataset: { quickAdd: "" } }, el("h2", { textContent: t.quickAdd }), el("p", { className: "muted", textContent: t.quickLead }));
+    const row = el("div", { className: "row tiles" });
+    for (const tile of tiles) {
+      const text = tile.kind === "plan" ? `+ ${tile.provider === "glm" ? "GLM" : "MiniMax"}` : `+ ${t.tileSignIn(tile.label)}`;
+      const node = button(text, `tile-${tile.provider}`, () => {
+        openTile = openTile === tile.provider ? null : tile.provider;
+        render();
+      });
+      node.setAttribute("aria-pressed", String(openTile === tile.provider));
+      row.append(node);
+    }
+    section.append(row);
+    const open = tiles.find((tile) => tile.provider === openTile);
+    const asked = !defaults?.dataClass && defaults?.dataClassMode !== "off";
+    if (open) {
+      if (asked) section.append(dataDefaultRow());
+      if (open.kind === "plan") {
+        section.append(planQuickForm(open.provider));
+        if (!defaults?.autoSeenAt) section.append(el("p", { className: "muted", dataset: { autoNote: "" }, textContent: t.autoNote }));
+      } else {
+        section.append(poolQuickForm(open.provider, state.pools.providers.find((entry) => entry.provider === open.provider)?.signInHint[locale] ?? ""));
+      }
+    }
+    if (!asked) section.append(dataDefaultRow());
+    return section;
   }
   function render() {
     if (!state) return;
@@ -949,6 +1140,7 @@
     for (const account of state.settings.accounts) if (!planOf(account)) list.append(accountItem(account));
     root.replaceChildren(
       el("h1", { textContent: t.title }),
+      ...state.plans && state.pools ? [quickAddSection()] : [],
       el("p", { className: "muted", textContent: t.lead }),
       list,
       el("h2", { textContent: t.add }),
@@ -957,6 +1149,9 @@
       ...state.pools ? [poolsSection(state.pools, state.plans)] : []
     );
   }
+  host.service.onEvent?.((event) => {
+    if (event?.event === "pools" || event?.event === "quota") void load().catch(() => void 0);
+  });
   host.onContext(({ appearance }) => {
     locale = appearance.locale === "ru" ? "ru" : "en";
     t = STRINGS[locale];

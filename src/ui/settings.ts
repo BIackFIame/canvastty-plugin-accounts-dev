@@ -7,7 +7,8 @@ import {
   HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, brokerableShape, harnessSupport, newAccountId, secretKeyOf,
   type Account, type AccountsSettings, type Harness, type PresetId
 } from '../shared/accounts.ts';
-import type { CheckResult, ModelNotice, PlansView } from '../service/accounts.ts';
+import type { AccountDefaults, CheckResult, ModelNotice, PlansView, QuickAddResult } from '../service/accounts.ts';
+import type { DataClass } from '../pools/model.ts';
 import { BUNDLED_CHECKED, sortModels, type PlanModelList } from '../plans/models.ts';
 import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, PLAN_INFO, planOf, type PlanProvider, type PlanRegion } from '../plans/plans.ts';
 import type { PoolsView, PoolMemberView } from '../pools/service.ts';
@@ -27,6 +28,7 @@ interface State {
   plans?: PlansView;
   models?: Record<string, PlanModelList>;
   modelNotices?: ModelNotice[];
+  defaults?: AccountDefaults;
 }
 interface QuotaLine {
   state: 'ok' | 'low' | 'exhausted' | 'presumed-reset' | 'unknown' | 'stale';
@@ -86,7 +88,26 @@ const STRINGS = {
     modelMoved: (notice: ModelNotice) => `${notice.label}: ${notice.from.model} → ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, small ${notice.from.smallModel} → ${notice.to.smallModel}` : ''}`
       + (notice.reason === 'older' ? ' (the old model is older than every model the plan lists now).' : ' (a newer model is on the plan\'s list).'),
     modelsMovedWhy: 'No model was chosen for these accounts (or the plugin cannot tell whether one was), so they follow the plan\'s list. Choose a model on the account to keep it.',
-    ok: 'OK'
+    ok: 'OK',
+    quickAdd: 'Add a subscription', quickLead: 'Choose the provider and paste the key: the region, name and limits are filled in; change them under «Advanced».',
+    tileSignIn: (label: string) => `${label} (sign-in)`, advanced: 'Advanced', regionAuto: 'Find it from the key',
+    dataDefault: 'Data class for new accounts', dataAsk: 'Trust new accounts with data up to (asked once, remembered):',
+    dataChooseFirst: 'Choose how far you trust new accounts with data first (asked once).',
+    dataOff: 'Data classes are off (the Assistant\'s data-check mode is Off): new accounts are added without asking.',
+    autoNote: '«For Auto» is on by default; the Assistant has not read these accounts yet, so Accounts cannot tell whether Auto is set up.',
+    grantNote: 'The Assistant may use a new account once it is allowed under Settings → Agents.',
+    findingRegion: 'Checking the key with the plan\'s quota read (no model request)…',
+    found: (region: string, host: string) => `Added. Region found: ${region} — the key answered on ${host}.`,
+    signInAdd: 'Add and sign in', moveRegion: (label: string) => `Move to ${label}`,
+    moveRegionNote: (host: string) => `the account and its saved key go to ${host}`,
+    moved: (host: string) => `Moved; the key is now sent only to ${host}.`,
+    quickFail: {
+      'key-refused': (hosts: string[]) => hosts.length > 1 ? `The key did not work on ${hosts.join(' or ')}. Nothing was saved.` : `The key did not work on ${hosts[0] ?? ''}. Nothing was saved.`,
+      unreachable: (host: string) => `${host} did not answer, so the key could not be checked. Nothing was saved; try again or choose the region under «Advanced».`,
+      error: (host: string, status: number | null) => `${host} answered ${status === null ? 'in an unknown way' : `HTTP ${status}`}. Nothing was saved; try again or choose the region under «Advanced».`,
+      'pay-as-you-go': 'This is a MiniMax pay-as-you-go key (sk-api-…), not a Coding Plan key: it has no plan quota. Add it as a model account (MiniMax preset) above. Nothing was sent.',
+      busy: 'A key of this plan is being checked already.', budget: 'Too many checks this hour; try later or choose the region under «Advanced».'
+    }
   },
   ru: {
     title: 'Учётные записи моделей',
@@ -136,7 +157,26 @@ const STRINGS = {
     modelMoved: (notice: ModelNotice) => `${notice.label}: ${notice.from.model} → ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, малая ${notice.from.smallModel} → ${notice.to.smallModel}` : ''}`
       + (notice.reason === 'older' ? ' (старая модель старше всех моделей, которые тариф перечисляет сейчас).' : ' (в списке тарифа появилась более новая модель).'),
     modelsMovedWhy: 'Для этих учётных записей модель не выбиралась (или плагин не может это определить), поэтому они следуют списку тарифа. Чтобы оставить модель, выберите её в учётной записи.',
-    ok: 'Понятно'
+    ok: 'Понятно',
+    quickAdd: 'Добавить подписку', quickLead: 'Выберите провайдера и вставьте ключ: регион, название и лимиты заполнятся сами; изменить их можно в «Дополнительно».',
+    tileSignIn: (label: string) => `${label} (вход в аккаунт)`, advanced: 'Дополнительно', regionAuto: 'Определить по ключу',
+    dataDefault: 'Класс данных для новых аккаунтов', dataAsk: 'Новым аккаунтам доверяю данные до (спрошу один раз и запомню):',
+    dataChooseFirst: 'Сначала выберите, до какого класса доверять данные новым аккаунтам (спрашивается один раз).',
+    dataOff: 'Классы данных выключены (режим проверки данных в Assistant — «Выкл.»): новые аккаунты добавляются без вопроса.',
+    autoNote: '«Для Auto» включено по умолчанию; Assistant ещё не читал эти аккаунты, поэтому Accounts не видит, настроен ли Auto.',
+    grantNote: 'Assistant сможет использовать новый аккаунт, когда он разрешён в Настройки → Агенты.',
+    findingRegion: 'Проверяю ключ чтением квоты тарифа (без запроса к модели)…',
+    found: (region: string, host: string) => `Добавлено. Найден регион: ${region} — ключ ответил на ${host}.`,
+    signInAdd: 'Добавить и войти', moveRegion: (label: string) => `Перенести на ${label}`,
+    moveRegionNote: (host: string) => `аккаунт и сохранённый ключ перейдут на ${host}`,
+    moved: (host: string) => `Перенесено; ключ теперь отправляется только на ${host}.`,
+    quickFail: {
+      'key-refused': (hosts: string[]) => hosts.length > 1 ? `Ключ не подошёл ни к ${hosts.join(', ни к ')}. Ничего не сохранено.` : `Ключ не подошёл к ${hosts[0] ?? ''}. Ничего не сохранено.`,
+      unreachable: (host: string) => `${host} не ответил, ключ не проверен. Ничего не сохранено; повторите или выберите регион в «Дополнительно».`,
+      error: (host: string, status: number | null) => `${host} ответил ${status === null ? 'непонятно' : `HTTP ${status}`}. Ничего не сохранено; повторите или выберите регион в «Дополнительно».`,
+      'pay-as-you-go': 'Это ключ MiniMax с оплатой по факту (sk-api-…), а не ключ Coding Plan: квоты тарифа у него нет. Добавьте его выше как учётную запись модели (пресет MiniMax). Ничего не отправлялось.',
+      busy: 'Ключ этого тарифа уже проверяется.', budget: 'Слишком много проверок за час; повторите позже или выберите регион в «Дополнительно».'
+    }
   }
 };
 const KEY_PROBLEM: Record<'en' | 'ru', Record<string, string>> = {
@@ -182,8 +222,6 @@ function saveAccounts(change: (accounts: Account[]) => Account[]): Promise<boole
       await host.service.request(SERVICE, 'save', { settings: { version: 1, accounts } });
       say(t.saved);
       await load().catch(error => say(errorText(error)));
-// The service tells the page when a sign-in card ends or a quota changes.
-host.service.onEvent?.(event => { if (event?.event === 'pools' || event?.event === 'quota') void load().catch(() => undefined); });
       return true;
     } catch (error) {
       say(`${t.notSaved}${errorText(error)}`);
@@ -385,18 +423,6 @@ function poolsSection(pools: PoolsView, plans?: PlansView): HTMLElement {
     if (!entry.accounts.length) list.append(el('li', { className: 'muted', textContent: t.poolNone }));
     for (const member of entry.accounts) list.append(poolMember(member));
     block.append(list);
-    const label = el('input', { name: `pool-label-${entry.provider}`, placeholder: t.name });
-    let trust: string | null = null;
-    block.append(el('div', { className: 'row' }, field(t.name, label)),
-      el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }), trustChoice(`pool-new-trust-${entry.provider}`, null, value => { trust = value; })),
-      el('div', { className: 'row' }, button(t.poolAdd, `pool-add-${entry.provider}`, () => {
-        if (!trust) { say(t.poolChooseTrust); return; }
-        poolRequest('poolAdd', { provider: entry.provider, label: label.value.trim(), trust }).then(answer => {
-          const signIn = (answer as { signIn?: { error?: string } }).signIn;
-          say(signIn && 'error' in signIn ? String(signIn.error) : t.poolSignInOpened);
-          return load();
-        }, error => say(`${t.notSaved}${errorText(error)}`));
-      }), el('span', { className: 'muted', textContent: entry.signInHint[locale] })));
     section.append(block);
   }
   if (plans) {
@@ -488,6 +514,16 @@ function planMember(account: Account): HTMLLIElement {
         if (!await saveAccounts(accounts => accounts.filter(entry => entry.id !== account.id))) return;
         await host.secrets.delete(secretKeyOf(account.id)).catch(error => say(errorText(error)));
       })));
+  if (info) {
+    // The key stays on the host it was found on; only the person moves it to the plan's other host.
+    const other: PlanRegion = info.region === 'intl' ? 'cn' : 'intl';
+    const target = PLAN_INFO[info.provider].regions[other];
+    item.append(el('div', { className: 'row' },
+      button(t.moveRegion(target.label[locale]), `plan-region-${account.id}`, () => {
+        host.service.request(SERVICE, 'planRegion', { accountId: account.id, region: other })
+          .then(answer => { say(t.moved((answer as { host: string }).host)); return load(); }, error => say(`${t.notSaved}${errorText(error)}`));
+      }), el('span', { className: 'muted', textContent: t.moveRegionNote(target.host) })));
+  }
   return item;
 }
 
@@ -525,36 +561,172 @@ function planBlock(entry: PlansView['providers'][number]): HTMLElement {
   if (!members.length) list.append(el('li', { className: 'muted', textContent: t.poolNone }));
   for (const account of members) list.append(planMember(account));
   block.append(list);
-  const label = el('input', { name: `plan-new-label-${entry.provider}`, placeholder: t.name });
-  const region = el('select', { name: `plan-new-region-${entry.provider}` });
-  for (const option of entry.regions) region.append(el('option', { value: option.region, textContent: option.label[locale] }));
-  const key = el('input', { type: 'password', placeholder: t.key, autocomplete: 'off', name: `plan-new-key-${entry.provider}` });
-  const cap = el('input', { type: 'number', min: '1', max: String(MAX_CONCURRENCY), value: String(DEFAULT_CONCURRENCY), name: `plan-new-concurrency-${entry.provider}` });
-  const auto = el('input', { type: 'checkbox', name: `plan-new-auto-${entry.provider}` });
-  let trust: string | null = null;
-  block.append(
-    el('div', { className: 'row' }, field(t.name, label), field(t.region, region), field(t.key, key), field(t.concurrency, cap)),
-    el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }), trustChoice(`plan-new-trust-${entry.provider}`, null, value => { trust = value; })),
-    el('div', { className: 'row' }, el('label', { className: 'check' }, auto, ` ${t.forAuto}`)),
-    el('div', { className: 'row' }, button(t.planAdd, `plan-add-${entry.provider}`, async () => {
-      const value = key.value.trim();
-      if (!value) { say(t.planKeyFirst); return; }
-      const problem = apiKeyProblem(value);
-      if (problem) { key.value = ''; say(KEY_PROBLEM[locale][problem] ?? problem); return; }
-      if (!trust) { say(t.poolChooseTrust); return; }
-      try {
-        const { id } = await host.service.request(SERVICE, 'planAdd', {
-          provider: entry.provider as PlanProvider, region: region.value as PlanRegion, label: label.value.trim(), trust, concurrency: Number(cap.value), brokerable: auto.checked
-        }) as { id: string };
-        await host.secrets.set(secretKeyOf(id), value);
-        key.value = '';
-        await host.service.request(SERVICE, 'keyChanged', { accountId: id });
-        say(t.keySaved);
-      } catch (error) { say(`${t.notSaved}${errorText(error)}`); }
-      await load().catch(error => say(errorText(error)));
-    })));
   return block;
 }
+
+// ---- quick add: a provider tile and the key; everything else under «Дополнительно» ----
+
+type Tile = { kind: 'plan'; provider: PlanProvider } | { kind: 'pool'; provider: string; label: string };
+/** The open tile and the data class chosen inline, kept across re-renders (the service's events re-render the page). */
+let openTile: string | null = null;
+let inlineClass: DataClass | null = null;
+const DEFAULT_CLASSES: readonly DataClass[] = ['D0', 'D1', 'D2', 'D3'];
+const PROBE_SECRET = (provider: PlanProvider): string => `probe.${provider}`;
+
+/** The data class a new account gets: the person's default, their inline answer (then remembered), or none under Off. */
+async function newAccountClass(): Promise<{ ok: true; trust?: string } | { ok: false }> {
+  const defaults = state!.defaults;
+  if (defaults?.dataClass) return { ok: true, trust: defaults.dataClass };
+  if (defaults?.dataClassMode === 'off') return { ok: true };
+  if (!inlineClass) { say(t.dataChooseFirst); return { ok: false }; }
+  await host.service.request(SERVICE, 'setDefaults', { dataClass: inlineClass });
+  return { ok: true, trust: inlineClass };
+}
+
+/** «Класс данных для новых аккаунтов»: a compact choice; once set, a change is saved at once. */
+function dataDefaultRow(): HTMLElement {
+  const defaults = state!.defaults;
+  if (defaults?.dataClassMode === 'off' && !defaults.dataClass) return el('p', { className: 'muted', dataset: { dataDefault: 'off' }, textContent: t.dataOff });
+  const current = defaults?.dataClass ?? null;
+  const box = el('span', { className: 'agents' });
+  for (const value of DEFAULT_CLASSES) {
+    const input = el('input', { type: 'radio', name: 'data-default', value, checked: (current ?? inlineClass) === value });
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      if (!current) { inlineClass = value; return; }
+      host.service.request(SERVICE, 'setDefaults', { dataClass: value }).then(() => { say(t.saved); return load(); }, error => say(`${t.notSaved}${errorText(error)}`));
+    });
+    box.append(el('label', { className: 'check' }, input, ` ${value}`));
+  }
+  return el('div', { className: 'row', dataset: { dataDefault: current ?? 'ask' } }, el('span', { className: 'label', textContent: current ? t.dataDefault : t.dataAsk }), box);
+}
+
+function quickFailText(result: Extract<QuickAddResult, { added: false }>): string {
+  const last = result.tried.at(-1);
+  switch (result.reason) {
+    case 'key-refused': return t.quickFail['key-refused'](result.tried.map(entry => entry.host));
+    case 'unreachable': return t.quickFail.unreachable(last?.host ?? '');
+    case 'error': return t.quickFail.error(last?.host ?? '', last?.status ?? null);
+    case 'pay-as-you-go': return t.quickFail['pay-as-you-go'];
+    case 'busy': return t.quickFail.busy;
+    case 'budget': return t.quickFail.budget;
+    case 'trust-needed': return t.dataChooseFirst;
+    case 'no-key': return t.planKeyFirst;
+    default: return `${t.notSaved}${result.message}`;
+  }
+}
+
+function planQuickForm(provider: PlanProvider): HTMLElement {
+  const info = state!.plans!.providers.find(entry => entry.provider === provider)!;
+  const key = el('input', { type: 'password', placeholder: t.key, autocomplete: 'off', name: `quick-key-${provider}` });
+  const label = el('input', { name: `quick-label-${provider}`, placeholder: t.name });
+  const region = el('select', { name: `quick-region-${provider}` });
+  region.append(el('option', { value: '', textContent: t.regionAuto }));
+  for (const option of info.regions) region.append(el('option', { value: option.region, textContent: option.label[locale] }));
+  const cap = el('input', { type: 'number', min: '1', max: String(MAX_CONCURRENCY), value: String(DEFAULT_CONCURRENCY), name: `quick-concurrency-${provider}` });
+  const auto = el('input', { type: 'checkbox', checked: true, name: `quick-auto-${provider}` });
+  let trust: string | null = null;
+  const advanced = el('details', { className: 'advanced', dataset: { advanced: provider } }, el('summary', { textContent: t.advanced }),
+    el('div', { className: 'row' }, field(t.name, label), field(t.region, region), field(t.concurrency, cap)),
+    el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }), trustChoice(`quick-trust-${provider}`, null, value => { trust = value; })),
+    el('div', { className: 'row' }, el('label', { className: 'check' }, auto, ` ${t.forAuto}`)));
+  const add = button(t.add, `quick-add-${provider}`, async () => {
+    const value = key.value.trim();
+    if (!value) { say(t.planKeyFirst); return; }
+    const problem = apiKeyProblem(value);
+    if (problem) { key.value = ''; say(KEY_PROBLEM[locale][problem] ?? problem); return; }
+    add.disabled = true;
+    try {
+      const chosen = trust ? { ok: true as const, trust } : await newAccountClass();
+      if (!chosen.ok) return;
+      say(t.findingRegion);
+      await host.secrets.set(PROBE_SECRET(provider), value);
+      let result: QuickAddResult;
+      try {
+        result = await host.service.request(SERVICE, 'planQuickAdd', {
+          provider, ...(region.value ? { region: region.value as PlanRegion } : {}), ...(label.value.trim() ? { label: label.value.trim() } : {}),
+          ...(chosen.trust ? { trust: chosen.trust } : {}), concurrency: Number(cap.value), brokerable: auto.checked
+        }) as QuickAddResult;
+        if (!result.added) { say(quickFailText(result)); await load().catch(() => undefined); return; }
+        await host.secrets.set(secretKeyOf(result.id), value);
+        key.value = '';
+        await host.service.request(SERVICE, 'keyChanged', { accountId: result.id });
+      } finally {
+        await host.secrets.delete(PROBE_SECRET(provider)).catch(() => undefined);
+      }
+      const regionLabel = PLAN_INFO[provider].regions[result.region].label[locale];
+      const quota = result.quota && result.quota.remainingPercent !== null ? ` ${t.quota}: ${t.left(result.quota.remainingPercent, result.quota.window)}.` : '';
+      const autoLine = result.forAuto ? ` ${result.autoSeen ? '' : `${t.autoNote} `}${t.grantNote}` : '';
+      openTile = null;
+      inlineClass = null;
+      await load().catch(error => say(errorText(error)));
+      say(`${t.found(regionLabel, result.host)}${quota}${autoLine}`);
+    } catch (error) {
+      say(`${t.notSaved}${errorText(error)}`);
+    } finally {
+      add.disabled = false;
+    }
+  });
+  return el('div', { className: 'add', dataset: { quick: provider } }, el('div', { className: 'row' }, field(t.key, key), add), advanced);
+}
+
+function poolQuickForm(provider: string, hint: string): HTMLElement {
+  const label = el('input', { name: `quick-label-${provider}`, placeholder: t.name });
+  let trust: string | null = null;
+  const advanced = el('details', { className: 'advanced', dataset: { advanced: provider } }, el('summary', { textContent: t.advanced }),
+    el('div', { className: 'row' }, field(t.name, label)),
+    el('div', { className: 'row' }, el('span', { className: 'label', textContent: t.poolTrust }), trustChoice(`quick-trust-${provider}`, null, value => { trust = value; })));
+  const add = button(t.signInAdd, `quick-add-${provider}`, async () => {
+    add.disabled = true;
+    try {
+      const chosen = trust ? { ok: true as const, trust } : await newAccountClass();
+      if (!chosen.ok) return;
+      const answer = await poolRequest('poolAdd', { provider, label: label.value.trim(), trust: chosen.trust ?? 'unset' }) as { signIn?: { error?: string } };
+      openTile = null;
+      inlineClass = null;
+      await load().catch(error => say(errorText(error)));
+      say(answer.signIn && 'error' in answer.signIn ? String(answer.signIn.error) : t.poolSignInOpened);
+    } catch (error) {
+      say(`${t.notSaved}${errorText(error)}`);
+    } finally {
+      add.disabled = false;
+    }
+  });
+  return el('div', { className: 'add', dataset: { quick: provider } }, el('div', { className: 'row' }, add, el('span', { className: 'muted', textContent: hint })), advanced);
+}
+
+/** «Добавить подписку»: provider tiles; the open tile's form is the key (or the sign-in) and a collapsed «Дополнительно». */
+function quickAddSection(): HTMLElement {
+  const tiles: Tile[] = [
+    ...(state!.plans?.providers ?? []).map(entry => ({ kind: 'plan' as const, provider: entry.provider })),
+    ...(state!.pools?.providers ?? []).map(entry => ({ kind: 'pool' as const, provider: entry.provider, label: entry.label }))
+  ];
+  const defaults = state!.defaults;
+  const section = el('section', { className: 'quick', dataset: { quickAdd: '' } }, el('h2', { textContent: t.quickAdd }), el('p', { className: 'muted', textContent: t.quickLead }));
+  const row = el('div', { className: 'row tiles' });
+  for (const tile of tiles) {
+    const text = tile.kind === 'plan' ? `+ ${tile.provider === 'glm' ? 'GLM' : 'MiniMax'}` : `+ ${t.tileSignIn(tile.label)}`;
+    const node = button(text, `tile-${tile.provider}`, () => { openTile = openTile === tile.provider ? null : tile.provider; render(); });
+    node.setAttribute('aria-pressed', String(openTile === tile.provider));
+    row.append(node);
+  }
+  section.append(row);
+  const open = tiles.find(tile => tile.provider === openTile);
+  const asked = !defaults?.dataClass && defaults?.dataClassMode !== 'off';
+  if (open) {
+    // Asked once, inline, only while no default is set (and never when data classes are off).
+    if (asked) section.append(dataDefaultRow());
+    if (open.kind === 'plan') {
+      section.append(planQuickForm(open.provider));
+      if (!defaults?.autoSeenAt) section.append(el('p', { className: 'muted', dataset: { autoNote: '' }, textContent: t.autoNote }));
+    } else {
+      section.append(poolQuickForm(open.provider, state!.pools!.providers.find(entry => entry.provider === open.provider)?.signInHint[locale] ?? ''));
+    }
+  }
+  if (!asked) section.append(dataDefaultRow());
+  return section;
+}
+
 
 function render(): void {
   if (!state) return;
@@ -563,6 +735,7 @@ function render(): void {
   for (const account of state.settings.accounts) if (!planOf(account)) list.append(accountItem(account));
   root.replaceChildren(
     el('h1', { textContent: t.title }),
+    ...(state.plans && state.pools ? [quickAddSection()] : []),
     el('p', { className: 'muted', textContent: t.lead }),
     list,
     el('h2', { textContent: t.add }),
@@ -571,6 +744,9 @@ function render(): void {
     ...(state.pools ? [poolsSection(state.pools, state.plans)] : [])
   );
 }
+
+// The service tells the page when a sign-in card ends or a quota changes: one listener for the page's lifetime.
+host.service.onEvent?.(event => { if (event?.event === 'pools' || event?.event === 'quota') void load().catch(() => undefined); });
 
 host.onContext(({ appearance }) => {
   locale = appearance.locale === 'ru' ? 'ru' : 'en';

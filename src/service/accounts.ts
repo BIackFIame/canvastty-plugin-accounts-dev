@@ -16,13 +16,16 @@ import { DATA_CLASSES, covers, type DataClass, type DataClassMode } from '../poo
 import { POOL_INFO, isPoolProvider } from '../pools/providers.ts';
 import { viewOf, emptyRecord } from '../quota/model.ts';
 import {
-  PLAN_HARNESSES, PLAN_INFO, PLAN_PROVIDERS, PLAN_VALUE, concurrencyOf, isPlanProvider, isPlanRegion, newPlanAccount, planHarnesses, planLaunchAccount, planOf,
+  DEFAULT_CONCURRENCY as DEFAULT_PLAN_CONCURRENCY, PLAN_HARNESSES, PLAN_INFO, PLAN_PROVIDERS, PLAN_VALUE, concurrencyOf, isPlanProvider, isPlanRegion, newPlanAccount, planHarnesses, planLaunchAccount, planOf,
   type PlanProvider, type PlanRegion
 } from '../plans/plans.ts';
 import { PlanPool, summarizeSkipped, type KeyState, type PlanMember } from '../plans/service.ts';
 import { PlanModelReader } from '../plans/modelReader.ts';
 import { FORMER_DEFAULTS, listed, olderThanList, sortModels, type PlanModelList } from '../plans/models.ts';
 import { matchModel } from '../routes/routes.ts';
+import { probePlanRegion, type ProbeTry } from '../plans/probe.ts';
+import type { QuotaObservation } from '../quota/model.ts';
+import { createHash } from 'node:crypto';
 
 /**
  * The Accounts service: the launch contributor behind the launcher's "Model account" (and reasoning effort), the
@@ -32,6 +35,16 @@ import { matchModel } from '../routes/routes.ts';
  */
 
 const STORAGE_KEY = 'accounts';
+/** The person's once-set defaults for new accounts (quick add), apart from the accounts themselves. */
+const DEFAULTS_KEY = 'defaults';
+/** The plugin secret the page stages a pasted plan key in while quick add finds its region (deleted by the page after). */
+export const probeSecretKey = (provider: PlanProvider): string => `probe.${provider}`;
+/** The Assistant: its shared reads and brokered requests are how Accounts learns that Auto is set up. */
+const ASSISTANT_ID = 'canvastty-assistant';
+/** Region probes per plan and hour (the quota reader's own per-account read budget). */
+const MAX_PROBES_PER_HOUR = 40;
+/** Short plan names for the automatic labels («GLM 1», «MiniMax 2»). */
+const PLAN_SHORT: Record<PlanProvider, string> = { glm: 'GLM', minimax: 'MiniMax' };
 /** What this plugin shares with readers the person approved (services[].shares in the manifest). */
 export const SHARED_METHODS = ['accounts.routes', 'accounts.quota'] as const;
 /** CanvasTTY gives a shared read 5 s; key and Ollama checks get at most this, then the last listing answers. */
@@ -60,6 +73,28 @@ export type CheckResult =
   | { kind: 'key'; ok: boolean; problem: string | null };
 
 interface Stored { settings: AccountsSettings; keyOrigins: Record<string, string>; modelNotices?: ModelNotice[] }
+
+/**
+ * Quick add's defaults. `dataClass`: the person's answer to «Класс данных для новых аккаунтов», asked once (null until
+ * then). `dataClassMode`: the person's data-check mode when the Assistant told it in a shared read (null: not known,
+ * so the data class is asked). `autoSeenAt`: when the Assistant last read these accounts or sent a request through one
+ * (Auto is set up).
+ */
+export interface AccountDefaults { dataClass: DataClass | null; dataClassMode: DataClassMode | null; autoSeenAt: number | null }
+const NO_DEFAULTS: AccountDefaults = Object.freeze({ dataClass: null, dataClassMode: null, autoSeenAt: null });
+function loadDefaults(value: unknown): AccountDefaults {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return {
+    dataClass: (DATA_CLASSES as readonly unknown[]).includes(raw.dataClass) ? raw.dataClass as DataClass : null,
+    dataClassMode: raw.dataClassMode === 'strict' || raw.dataClassMode === 'warn' || raw.dataClassMode === 'off' ? raw.dataClassMode : null,
+    autoSeenAt: typeof raw.autoSeenAt === 'number' && Number.isFinite(raw.autoSeenAt) ? raw.autoSeenAt : null
+  };
+}
+
+/** Quick add's answer: the account on the host that took the key, or why nothing was saved. */
+export type QuickAddResult =
+  | { added: true; id: string; label: string; provider: PlanProvider; region: PlanRegion; host: string; trust: string; concurrency: number; forAuto: boolean; autoSeen: boolean; quota: RouteQuota | null }
+  | { added: false; reason: 'no-key' | 'key-format' | 'trust-needed' | 'busy' | 'budget' | 'key-refused' | 'unreachable' | 'error' | 'pay-as-you-go'; message: string; tried: Array<Pick<ProbeTry, 'host' | 'outcome' | 'status'>> };
 
 /**
  * A plan account's model changed without the person choosing it: an account saved before the plan's lists (with an
@@ -130,6 +165,14 @@ export class AccountsService {
   /** The last model account rows a shared read listed (answers a read whose checks run late). */
   private lastShared: { at: number; rows: Awaited<ReturnType<typeof listRoutes>> } | null = null;
   private readonly clock: () => number;
+  /** The network quick add's region probe uses (the quota reader's; none in tests unless given). */
+  private readonly probeFetch: QuotaFetch;
+  private defaultsState: AccountDefaults | null = null;
+  private defaultsWrites: Promise<unknown> = Promise.resolve();
+  private readonly probing = new Set<PlanProvider>();
+  private readonly probes = new Map<PlanProvider, number[]>();
+  /** A probe's reading, kept until the page binds the probed key to the new account (keyChanged re-applies it). */
+  private readonly probed = new Map<string, { hash: string; observation: QuotaObservation }>();
 
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
   constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; savedPools?: unknown; poolsUnread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; modelsFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
@@ -137,6 +180,7 @@ export class AccountsService {
     this.dataDir = options.dataDir;
     this.transport = options.transport;
     this.clock = options.now ?? Date.now;
+    this.probeFetch = options.quotaFetch ?? (async () => { throw new Error('no network here'); });
     this.settings = loadSettings(undefined);
     this.keyOrigins = {};
     this.unread = options.unread === true;
@@ -297,7 +341,7 @@ export class AccountsService {
 
   // ---- the settings page ----
 
-  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }>; pools: PoolsView; plans: PlansView; models: Record<string, PlanModelList>; modelNotices: ModelNotice[] }> {
+  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }>; pools: PoolsView; plans: PlansView; models: Record<string, PlanModelList>; modelNotices: ModelNotice[]; defaults: AccountDefaults }> {
     // One secrets read per keyed account, all at once (MAX_ACCOUNTS stays under the transport's host-call cap).
     const { settings } = this;
     const states = await Promise.all(settings.accounts.map(account =>
@@ -311,7 +355,7 @@ export class AccountsService {
     }
     const models: Record<string, PlanModelList> = {};
     for (const account of settings.accounts) { const list = this.models.list(account); if (list) models[account.id] = list; }
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView(), models, modelNotices: [...this.modelNotices] };
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView(), models, modelNotices: [...this.modelNotices], defaults: await this.defaults() };
   }
 
   private plansView(): PlansView {
@@ -346,6 +390,142 @@ export class AccountsService {
     });
     await this.save({ version: 1, accounts: [...this.settings.accounts, account] });
     return { id: account.id };
+  }
+
+  // ---- quick add: provider + key, the region found by the plan's own quota read ----
+
+  /** The defaults (read from storage once; an unreadable record counts as none and is read again next time). */
+  async defaults(): Promise<AccountDefaults> {
+    if (this.defaultsState) return this.defaultsState;
+    try {
+      this.defaultsState = loadDefaults(await this.host.callHost('storage.get', { key: DEFAULTS_KEY }));
+      return this.defaultsState;
+    } catch { return { ...NO_DEFAULTS }; }
+  }
+
+  private writeDefaults(change: (current: AccountDefaults) => AccountDefaults): Promise<AccountDefaults> {
+    const run = this.defaultsWrites.then(async () => {
+      const next = change(await this.defaults());
+      await this.host.callHost('storage.set', { key: DEFAULTS_KEY, value: { version: 1, ...next } });
+      this.defaultsState = next;
+      return next;
+    });
+    this.defaultsWrites = run.catch(() => undefined);
+    return run;
+  }
+
+  /** «Класс данных для новых аккаунтов»: the person's answer, remembered for every account added after it. */
+  async setDefaults(params: unknown): Promise<AccountDefaults> {
+    const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    if (!(DATA_CLASSES as readonly unknown[]).includes(values.dataClass)) throw new Error('Choose D0, D1, D2 or D3.');
+    return this.writeDefaults(current => ({ ...current, dataClass: values.dataClass as DataClass }));
+  }
+
+  /**
+   * The Assistant read these accounts (a shared read the person approved) or sent a request through one: Auto is set
+   * up. With its data-check mode in the read's params, that mode is remembered too (Off: the data class is not asked).
+   * Written at most once an hour unless the mode changed.
+   */
+  private noteAssistant(caller: unknown, mode?: unknown): void {
+    const pluginId = caller && typeof caller === 'object' ? (caller as { pluginId?: unknown }).pluginId : undefined;
+    if (pluginId !== ASSISTANT_ID) return;
+    const known = mode === 'strict' || mode === 'warn' || mode === 'off' ? mode : null;
+    const now = this.clock();
+    void this.defaults().then(current => {
+      if (current.autoSeenAt !== null && now - current.autoSeenAt < 3_600_000 && (known === null || known === current.dataClassMode)) return;
+      return this.writeDefaults(value => ({ ...value, autoSeenAt: now, ...(known ? { dataClassMode: known } : {}) }));
+    }).catch(() => undefined);
+  }
+
+  /** «GLM 1», «GLM 2», …: the first number not used by this plan's accounts. */
+  private planLabel(provider: PlanProvider): string {
+    const taken = new Set(this.plans.members(this.settings.accounts, provider).map(member => member.label.toLowerCase()));
+    for (let n = this.plans.members(this.settings.accounts, provider).length + 1; ; n++) if (!taken.has(`${PLAN_SHORT[provider]} ${n}`.toLowerCase())) return `${PLAN_SHORT[provider]} ${n}`;
+  }
+
+  /**
+   * Quick add «+ GLM» / «+ MiniMax»: the page staged the pasted key in `probe.<plan>`; the plan's own quota read finds
+   * the region (international host first, the China host only when it refused the key; never a model request), and
+   * the account is saved on the host that took the key. Defaults: label «GLM n», 2 cards at once, for Auto on, the
+   * data class the person set once (asked when it is not set, unless their data-check mode is Off). Nothing is saved
+   * when no host takes the key. The page then writes the key for the new account and binds it (keyChanged).
+   */
+  async planQuickAdd(params: unknown): Promise<QuickAddResult> {
+    const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    if (!isPlanProvider(values.provider)) throw new Error('Choose GLM Coding Plan or MiniMax Coding Plan.');
+    if (values.region !== undefined && !isPlanRegion(values.region)) throw new Error('Choose the plan\'s region.');
+    if (values.trust !== undefined && values.trust !== 'unset' && !(DATA_CLASSES as readonly unknown[]).includes(values.trust)) throw new Error('Choose how far you trust the account: not set, D0, D1, D2 or D3.');
+    const provider = values.provider;
+    const fail = (reason: Extract<QuickAddResult, { added: false }>['reason'], message: string, tried: ProbeTry[] = []): QuickAddResult =>
+      ({ added: false, reason, message, tried: tried.map(({ host, outcome, status }) => ({ host, outcome, status })) });
+    const defaults = await this.defaults();
+    const trust = (values.trust as Account['trust'] | undefined) ?? defaults.dataClass ?? (defaults.dataClassMode === 'off' ? 'unset' : null);
+    if (!trust) return fail('trust-needed', 'Choose how far you trust new accounts with data (asked once).');
+    let key: string | null;
+    try {
+      const value = await this.host.callHost('secrets.get', { key: probeSecretKey(provider) });
+      key = typeof value === 'string' && value ? value : null;
+    } catch { throw new Error('The plugin\'s secrets are unavailable.'); }
+    if (!key) return fail('no-key', 'Paste the plan\'s API key first.');
+    const problem = apiKeyProblem(key);
+    if (problem) return fail('key-format', apiKeyProblemMessage(problem));
+    if (this.probing.has(provider)) return fail('busy', 'A key of this plan is being checked already.');
+    const now = this.clock();
+    const hour = (this.probes.get(provider) ?? []).filter(at => now - at < 3_600_000);
+    if (hour.length >= MAX_PROBES_PER_HOUR) return fail('budget', `At most ${MAX_PROBES_PER_HOUR} region checks an hour; try again later or choose the region under «Дополнительно».`);
+    this.probing.add(provider);
+    let probe: Awaited<ReturnType<typeof probePlanRegion>>;
+    try {
+      this.probes.set(provider, [...hour, now]);
+      probe = await probePlanRegion({ provider, key, fetch: this.probeFetch, now: this.clock, ...(isPlanRegion(values.region) ? { only: values.region } : {}) });
+    } finally { this.probing.delete(provider); }
+    if (!probe.ok) return fail(probe.reason, probe.message, probe.tried);
+    const label = typeof values.label === 'string' && values.label.trim() ? values.label.trim().slice(0, 60) : this.planLabel(provider);
+    const concurrency = values.concurrency === undefined ? DEFAULT_PLAN_CONCURRENCY : values.concurrency as number;
+    const forAuto = values.brokerable === undefined ? true : values.brokerable === true;
+    const taken = new Set([...this.settings.accounts.map(account => account.id), ...this.pools.settings.accounts.map(account => account.id)]);
+    const account = newPlanAccount({ id: newAccountId(`${provider}-${label}`, taken), provider, region: probe.region, label, trust, concurrency, brokerable: forAuto });
+    await this.save({ version: 1, accounts: [...this.settings.accounts, account] });
+    const saved = this.find(account.id)!;
+    if (probe.observation) {
+      this.quota.seed(saved, probe.observation);
+      this.probed.set(saved.id, { hash: keyHash(key), observation: probe.observation });
+    }
+    const view = this.quota.view(saved);
+    this.host.log('info', `${saved.id}: added on ${probe.host} (region ${probe.region}, found by the plan's quota read)`);
+    return { added: true, id: saved.id, label: saved.label, provider, region: probe.region, host: probe.host, trust, concurrency, forAuto, autoSeen: defaults.autoSeenAt !== null, quota: view ? routeQuota(view) : null };
+  }
+
+  /**
+   * «Сменить регион» on a plan account: the person moves it to the plan's other host, and the key saved for it goes
+   * with it (their action is the consent; nothing else ever moves an account or its key between hosts).
+   */
+  async planRegion(params: unknown): Promise<{ region: PlanRegion; host: string }> {
+    const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
+    if (!isPlanRegion(values.region)) throw new Error('Choose the plan\'s region.');
+    const region = values.region;
+    return this.serialized(async () => {
+      const account = this.find(values.accountId);
+      const plan = account ? planOf(account) : null;
+      if (!account || !plan) throw new Error('No such plan account.');
+      const host = PLAN_INFO[plan.provider].regions[region].host;
+      if (plan.host === host) return { region, host };
+      const moved = { ...account, baseUrl: `https://${host}${new URL(account.baseUrl).pathname}` } as Account;
+      const settings: AccountsSettings = { version: 1, accounts: this.settings.accounts.map(entry => entry.id === account.id ? moved : entry) };
+      validateSettings(settings);
+      const keyOrigins = { ...this.keyOrigins };
+      if (keyOrigins[account.id] === originOf(account.baseUrl)) keyOrigins[account.id] = originOf(moved.baseUrl);
+      else delete keyOrigins[account.id];
+      await this.persist({ settings, keyOrigins });
+      this.settings = settings;
+      this.keyOrigins = keyOrigins;
+      this.forgetCheck(account.id);
+      this.quota.forget(account.id);
+      this.models.forget(account.id);
+      this.probed.delete(account.id);
+      this.host.log('info', `${account.id}: moved to ${host} by the person`);
+      return { region, host };
+    });
   }
 
   async save(value: unknown): Promise<{ saved: true }> {
@@ -398,6 +578,13 @@ export class AccountsService {
       // Another key may be another plan: what was read with the old one no longer applies.
       this.quota.forget(account.id);
       this.models.forget(account.id);
+      // Quick add: the key its probe read the quota with is now this account's, so that reading stands.
+      const probed = this.probed.get(account.id);
+      this.probed.delete(account.id);
+      if (probed && keyOrigins[account.id]) {
+        const key = await this.readKey(account).catch(() => null);
+        if (key && keyHash(key) === probed.hash) this.quota.seed(account, probed.observation);
+      }
       // The plan's list with the new key, in the background (the page shows it on its next load).
       void this.models.read(account);
       return null;
@@ -717,6 +904,7 @@ export class AccountsService {
     const inner = values.params && typeof values.params === 'object' && !Array.isArray(values.params) ? values.params as Record<string, unknown> : {};
     const provider = typeof inner.provider === 'string' && /^[a-z0-9-]{1,32}$/u.test(inner.provider) ? inner.provider : undefined;
     const at = this.clock();
+    if (method === 'accounts.routes' || method === 'accounts.quota') this.noteAssistant(values.caller, inner.dataClassMode);
     if (method === 'accounts.routes') {
       this.pools.demand(provider);
       this.quota.demand(this.settings.accounts.filter(account => !provider || (planOf(account) ? planHarnesses(account) : account.agents).includes(provider as Harness)));
@@ -786,6 +974,7 @@ export class AccountsService {
     const account = this.find(values.ref);
     const offer = account && this.keyOrigins[account.id] === originOf(account.baseUrl) ? brokerOfferOf(account, false, this.models.list(account)?.models ?? []) : null;
     if (!account || !offer) return { ok: false, reason: 'This account is not offered to other extensions.' };
+    this.noteAssistant(values.caller);
     if (typeof values.model !== 'string' || !offer.models.includes(values.model)) {
       return { ok: false, reason: offer.models.length > 1 ? `${account.label} runs ${offer.models.slice(0, 8).join(', ')} only.` : `${account.label} runs ${account.model} only.` };
     }
@@ -972,6 +1161,9 @@ export class AccountsService {
     return { content: `Unknown tool ${name.slice(0, 40)}.`, isError: true };
   }
 }
+
+/** A key's fingerprint, kept in memory only to tell whether the key bound later is the one a probe used. */
+const keyHash = (key: string): string => createHash('sha256').update(key).digest('hex');
 
 /** A route row as shared: only the fields readers route on (no key states beyond the row's state, no paths). */
 function shareRow(row: object): Record<string, unknown> {

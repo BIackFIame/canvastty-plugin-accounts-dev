@@ -19,18 +19,18 @@
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 12190,
-      "sha256": "ddc468563719426bd0d3c668c40119f1bbadbfd17e9735328fbb706c86cd28ee"
+      "bytes": 13043,
+      "sha256": "ef2c0a323a5ed3a985f9ad487774069d3551403574e2b70fbc47835ff683e263"
     },
     {
       "path": "README.ru.md",
-      "bytes": 19727,
-      "sha256": "7b3bd2711c5f95ed212fb9efb0a4de184da3293f5fe7cecf15240ef9e95e5ca0"
+      "bytes": 21198,
+      "sha256": "be191f3354091f6317a6ef13e20d3fc4f0470c4f5052a9107becf02af7f2367a"
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 221815,
-      "sha256": "a7ec06218a1a1b950ba6f3fa266af5cf246911fdfe82f7c731cfe69ed0fe02de"
+      "bytes": 237001,
+      "sha256": "2a83de548c10e7dad21356f02e6e1de12ebeefee2c15d631a26721901b49b316"
     },
     {
       "path": "settings/accounts.html",
@@ -39,13 +39,13 @@
     },
     {
       "path": "settings/accounts.js",
-      "bytes": 74228,
-      "sha256": "4f422474ef78b278be4539c82357e427d72a246a5bfcd47e68b8fedae105b7f9"
+      "bytes": 91159,
+      "sha256": "a7faa3b6371081ffa10a61252a18aaced08225a19c3af0e46b724bdc7ec098c9"
     },
     {
       "path": "settings/accounts.css",
-      "bytes": 1342,
-      "sha256": "ff091a6c1947740a212c4565da40d82e0e1ef6520b6adfe8673f05fd55dc1413"
+      "bytes": 1488,
+      "sha256": "a2d941059f7534d376cbc26c224ff5bfb6aea3deabebee27f3f6561e1355a44c"
     }
   ],
   "services": [
