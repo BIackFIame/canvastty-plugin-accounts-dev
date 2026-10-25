@@ -7,7 +7,8 @@ import {
   HARNESS_LABELS, HARNESSES, PRESETS, accountKeyed, brokerableShape, harnessSupport, newAccountId, secretKeyOf,
   type Account, type AccountsSettings, type Harness, type PresetId
 } from '../shared/accounts.ts';
-import type { CheckResult, PlansView } from '../service/accounts.ts';
+import type { CheckResult, ModelNotice, PlansView } from '../service/accounts.ts';
+import { BUNDLED_CHECKED, sortModels, type PlanModelList } from '../plans/models.ts';
 import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, PLAN_INFO, planOf, type PlanProvider, type PlanRegion } from '../plans/plans.ts';
 import type { PoolsView, PoolMemberView } from '../pools/service.ts';
 import { quotaShareText } from '../shared/quotaText.ts';
@@ -24,6 +25,8 @@ interface State {
   quota?: Record<string, QuotaLine>;
   pools?: PoolsView;
   plans?: PlansView;
+  models?: Record<string, PlanModelList>;
+  modelNotices?: ModelNotice[];
 }
 interface QuotaLine {
   state: 'ok' | 'low' | 'exhausted' | 'presumed-reset' | 'unknown' | 'stale';
@@ -73,7 +76,17 @@ const STRINGS = {
     plansLead: 'Coding plans sign in with an API key: paste the plan\'s key once. It is stored in CanvasTTY\'s encrypted plugin secrets, sent only to the plan\'s own host, and several cards may run on one account at once. Launch Claude Code or OpenCode on "<plan> pool" to get the account with the most quota left.',
     region: 'Region', concurrency: 'Cards at once', forAuto: 'For Auto and other extensions (CanvasTTY adds the key; they never see it)',
     planAdd: 'Add subscription', planKeyFirst: 'Paste the plan\'s API key first.', planHost: (host: string) => `key sent only to ${host}`,
-    planRunning: (running: number, cap: number) => `${running} of ${cap} cards running`
+    planRunning: (running: number, cap: number) => `${running} of ${cap} cards running`,
+    mainModel: 'Model', smallModel: 'Small model (Claude Code\'s Haiku slot, OpenCode\'s titles)',
+    newest: (id: string) => `Newest on the plan's list (now ${id})`, notListed: 'not on the plan\'s list',
+    listLive: (host: string, age: string) => `Models: the plan's own list from ${host}, ${age}; read again daily and with Read now.`,
+    listBundled: (checked: string) => `Models: the plugin's built-in list (checked ${checked}) until the plan's own list is read.`,
+    listAge: (minutes: number) => minutes < 1 ? 'read just now' : minutes < 120 ? `read ${minutes} min ago` : `read ${Math.round(minutes / 60)} h ago`,
+    modelsMoved: 'Plan accounts moved to newer models',
+    modelMoved: (notice: ModelNotice) => `${notice.label}: ${notice.from.model} → ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, small ${notice.from.smallModel} → ${notice.to.smallModel}` : ''}`
+      + (notice.reason === 'older' ? ' (the old model is older than every model the plan lists now).' : ' (a newer model is on the plan\'s list).'),
+    modelsMovedWhy: 'No model was chosen for these accounts (or the plugin cannot tell whether one was), so they follow the plan\'s list. Choose a model on the account to keep it.',
+    ok: 'OK'
   },
   ru: {
     title: 'Учётные записи моделей',
@@ -113,7 +126,17 @@ const STRINGS = {
     plansLead: 'Тарифы для кодинга входят по API-ключу: вставьте ключ тарифа один раз. Он хранится в зашифрованных секретах плагина, отправляется только на хост самого тарифа, и на одной учётной записи можно запускать несколько карточек сразу. Запуск Claude Code или OpenCode на «пуле <тарифа>» берёт учётную запись с наибольшим остатком квоты.',
     region: 'Регион', concurrency: 'Карточек одновременно', forAuto: 'Для Auto и других расширений (ключ подставляет CanvasTTY, они его не видят)',
     planAdd: 'Добавить подписку', planKeyFirst: 'Сначала вставьте API-ключ тарифа.', planHost: (host: string) => `ключ отправляется только на ${host}`,
-    planRunning: (running: number, cap: number) => `запущено карточек: ${running} из ${cap}`
+    planRunning: (running: number, cap: number) => `запущено карточек: ${running} из ${cap}`,
+    mainModel: 'Модель', smallModel: 'Малая модель (слот Haiku в Claude Code, заголовки в OpenCode)',
+    newest: (id: string) => `Самая новая из списка тарифа (сейчас ${id})`, notListed: 'нет в списке тарифа',
+    listLive: (host: string, age: string) => `Модели: собственный список тарифа с ${host}, ${age}; читается заново раз в сутки и по «Прочитать сейчас».`,
+    listBundled: (checked: string) => `Модели: встроенный список плагина (проверен ${checked}), пока не прочитан собственный список тарифа.`,
+    listAge: (minutes: number) => minutes < 1 ? 'прочитан только что' : minutes < 120 ? `прочитан ${minutes} мин назад` : `прочитан ${Math.round(minutes / 60)} ч назад`,
+    modelsMoved: 'Учётные записи тарифов переведены на более новые модели',
+    modelMoved: (notice: ModelNotice) => `${notice.label}: ${notice.from.model} → ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, малая ${notice.from.smallModel} → ${notice.to.smallModel}` : ''}`
+      + (notice.reason === 'older' ? ' (старая модель старше всех моделей, которые тариф перечисляет сейчас).' : ' (в списке тарифа появилась более новая модель).'),
+    modelsMovedWhy: 'Для этих учётных записей модель не выбиралась (или плагин не может это определить), поэтому они следуют списку тарифа. Чтобы оставить модель, выберите её в учётной записи.',
+    ok: 'Понятно'
   }
 };
 const KEY_PROBLEM: Record<'en' | 'ru', Record<string, string>> = {
@@ -378,6 +401,8 @@ function poolsSection(pools: PoolsView, plans?: PlansView): HTMLElement {
   }
   if (plans) {
     section.append(el('p', { className: 'muted', textContent: t.plansLead }));
+    const notices = modelNotices(state!.modelNotices ?? []);
+    if (notices) section.append(notices);
     for (const entry of plans.providers) section.append(planBlock(entry));
   }
   section.append(el('p', { className: 'muted', textContent: t.poolRemoveNote }),
@@ -425,7 +450,7 @@ function planMember(account: Account): HTMLLIElement {
   const item = el('li', { className: 'account', dataset: { plan: account.id } });
   const regionLabel = info ? PLAN_INFO[info.provider].regions[info.region].label[locale] : '';
   item.append(el('div', { className: 'row' }, el('strong', { textContent: account.label }),
-    el('span', { className: 'muted', textContent: [regionLabel, account.model, info ? t.planHost(info.host) : null, info ? t.planRunning(info.running, info.concurrency) : null].filter(Boolean).join(' · ') })));
+    el('span', { className: 'muted', textContent: [regionLabel, account.smallModel ? `${account.model} / ${account.smallModel}` : account.model, info ? t.planHost(info.host) : null, info ? t.planRunning(info.running, info.concurrency) : null].filter(Boolean).join(' · ') })));
   item.append(keyRow(account));
   const quota = state!.quota?.[account.id];
   if (quota) item.append(quotaRow(account, quota));
@@ -436,17 +461,60 @@ function planMember(account: Account): HTMLLIElement {
   const label = el('input', { value: account.label, name: `plan-label-${account.id}` });
   const cap = el('input', { type: 'number', min: '1', max: String(MAX_CONCURRENCY), value: String(account.concurrency ?? DEFAULT_CONCURRENCY), name: `plan-concurrency-${account.id}` });
   const auto = el('input', { type: 'checkbox', checked: account.brokerable === true, name: `plan-auto-${account.id}` });
+  const list = state!.models?.[account.id];
+  const main = modelSelect(`plan-model-${account.id}`, info?.provider, list, list?.defaults.model ?? account.model, account.modelPinned === true ? account.model : null);
+  const small = modelSelect(`plan-small-model-${account.id}`, info?.provider, list, list?.defaults.smallModel ?? account.smallModel ?? account.model,
+    account.smallModelPinned === true ? account.smallModel ?? account.model : null);
+  item.append(el('div', { className: 'row' }, field(t.mainModel, main), field(t.smallModel, small)));
+  if (list) {
+    const age = list.readAt === null ? null : Math.max(0, Math.round((Date.now() - list.readAt) / 60_000));
+    item.append(el('div', { className: 'row', dataset: { models: account.id } }, el('span', { className: 'muted', textContent:
+      (list.source === 'live' && age !== null ? t.listLive(info?.host ?? '', t.listAge(age)) : t.listBundled(BUNDLED_CHECKED)) + (list.note ? ` (${list.note})` : '') })));
+  }
   item.append(el('div', { className: 'row' }, field(t.name, label), field(t.concurrency, cap)),
     el('div', { className: 'row' }, el('label', { className: 'check' }, auto, ` ${t.forAuto}`)),
     el('div', { className: 'row' },
-      button(t.saveChanges, `plan-save-${account.id}`, () => void saveAccounts(accounts => accounts.map(entry => entry.id !== account.id ? entry : {
-        ...entry, label: label.value.trim(), concurrency: Number(cap.value), brokerable: auto.checked
+      button(t.saveChanges, `plan-save-${account.id}`, () => void saveAccounts(accounts => accounts.map(entry => {
+        if (entry.id !== account.id) return entry;
+        // An empty choice follows the plan's list (the service fills in its newest model); a model is the person's pick.
+        const { modelPinned: _m, smallModelPinned: _s, ...rest } = entry;
+        const model = main.value || entry.model;
+        const smallModel = small.value || entry.smallModel;
+        return { ...rest, label: label.value.trim(), concurrency: Number(cap.value), brokerable: auto.checked, model,
+          ...(smallModel && smallModel !== model ? { smallModel } : { smallModel: undefined }),
+          ...(main.value ? { modelPinned: true } : {}), ...(small.value ? { smallModelPinned: true } : {}) } as Account;
       }))),
       button(t.remove, `plan-remove-${account.id}`, async () => {
         if (!await saveAccounts(accounts => accounts.filter(entry => entry.id !== account.id))) return;
         await host.secrets.delete(secretKeyOf(account.id)).catch(error => say(errorText(error)));
       })));
   return item;
+}
+
+/** A plan account's model choice: "newest on the list" (follows it) or one model of the list (the person's pick). */
+function modelSelect(name: string, provider: PlanProvider | undefined, list: PlanModelList | undefined, newest: string, pinned: string | null): HTMLSelectElement {
+  const select = el('select', { name });
+  select.append(el('option', { value: '', textContent: t.newest(newest), selected: pinned === null }));
+  const models = list ? [...list.models] : [];
+  if (pinned && !models.some(id => id.toLowerCase() === pinned.toLowerCase())) models.push(pinned);
+  for (const id of provider ? sortModels(provider, models) : models) {
+    const off = !list?.models.some(entry => entry.toLowerCase() === id.toLowerCase());
+    select.append(el('option', { value: id, textContent: off ? `${id} — ${t.notListed}` : id, selected: pinned !== null && pinned.toLowerCase() === id.toLowerCase() }));
+  }
+  return select;
+}
+
+/** Accounts whose model followed the plan's list without the person choosing: said once, until «OK». */
+function modelNotices(notices: readonly ModelNotice[]): HTMLElement | null {
+  if (!notices.length) return null;
+  const box = el('div', { className: 'add', dataset: { modelNotices: String(notices.length) } }, el('strong', { textContent: t.modelsMoved }));
+  const list = el('ul', { className: 'accounts' });
+  for (const notice of notices) list.append(el('li', { textContent: t.modelMoved(notice) }));
+  box.append(list, el('p', { className: 'muted', textContent: t.modelsMovedWhy }),
+    el('div', { className: 'row' }, button(t.ok, 'model-notices-seen', () => {
+      host.service.request(SERVICE, 'modelNoticesSeen').then(() => load(), error => say(errorText(error)));
+    })));
+  return box;
 }
 
 function planBlock(entry: PlansView['providers'][number]): HTMLElement {

@@ -10,6 +10,70 @@
     return null;
   }
 
+  // src/plans/models.ts
+  var BUNDLED_MODELS = Object.freeze({
+    glm: Object.freeze(["glm-5.3", "glm-5.3-flash"]),
+    minimax: Object.freeze(["MiniMax-M3", "MiniMax-M3.1-Flash"])
+  });
+  var BUNDLED_CHECKED = "2026-10-25";
+  var MAX_ID = 100;
+  var FAMILY = Object.freeze({
+    glm: /^glm-(\d+(?:\.\d+)*)((?:-[a-z0-9]+)*)$/iu,
+    minimax: /^minimax-m(\d+(?:\.\d+)*)((?:-[a-z0-9]+)*)$/iu
+  });
+  var SMALL = ["flash", "air", "flashx", "airx", "mini", "lite", "nano", "small"];
+  var UNSTABLE = /* @__PURE__ */ new Set(["preview", "beta", "alpha", "exp", "experimental", "test"]);
+  var NOT_TEXT = /* @__PURE__ */ new Set(["ocr", "image", "asr", "tts", "embedding", "realtime", "voice", "video", "vision", "audio", "rerank"]);
+  function parseModel(provider, id) {
+    if (typeof id !== "string" || !id || id.length > MAX_ID) return null;
+    const match = FAMILY[provider].exec(id);
+    if (!match) return null;
+    const variants = match[2].toLowerCase().split("-").filter(Boolean);
+    if (variants.some((variant) => NOT_TEXT.has(variant))) return null;
+    return {
+      id,
+      version: match[1].split(".").map(Number),
+      variants,
+      small: variants.some((variant) => SMALL.includes(variant)),
+      stable: !variants.some((variant) => UNSTABLE.has(variant))
+    };
+  }
+  var compareVersion = (a, b) => {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const diff = (a[i] ?? 0) - (b[i] ?? 0);
+      if (diff) return diff;
+    }
+    return 0;
+  };
+  var smallRank = (model) => Math.min(...model.variants.map((variant) => SMALL.indexOf(variant)).filter((rank) => rank >= 0), SMALL.length);
+  function better(a, b) {
+    if (a.stable !== b.stable) return a.stable ? -1 : 1;
+    const version = compareVersion(b.version, a.version);
+    if (version) return version;
+    if (a.variants.length !== b.variants.length) return a.variants.length - b.variants.length;
+    const rank = smallRank(a) - smallRank(b);
+    return rank || a.id.localeCompare(b.id);
+  }
+  function sortModels(provider, models) {
+    const parsed = models.map((id) => ({ id, model: parseModel(provider, id) }));
+    return parsed.sort((a, b) => {
+      if (!a.model || !b.model) return a.model ? -1 : b.model ? 1 : 0;
+      if (a.model.stable !== b.model.stable) return a.model.stable ? -1 : 1;
+      const version = compareVersion(b.model.version, a.model.version);
+      if (version) return version;
+      if (a.model.small !== b.model.small) return a.model.small ? 1 : -1;
+      return better(a.model, b.model);
+    }).map((entry) => entry.id);
+  }
+  function defaultModels(provider, models) {
+    const parsed = models.map((id) => parseModel(provider, id)).filter((model) => model !== null);
+    const pool = parsed.length ? parsed : BUNDLED_MODELS[provider].map((id) => parseModel(provider, id));
+    const mains = pool.filter((model) => !model.small).sort(better);
+    const smalls = pool.filter((model) => model.small).sort(better);
+    const main = mains[0] ?? smalls[0];
+    return { model: main.id, smallModel: (smalls[0] ?? main).id };
+  }
+
   // src/plans/plans.ts
   var PLAN_PROVIDERS = ["glm", "minimax"];
   var PLAN_HARNESSES = Object.freeze(["claude", "opencode"]);
@@ -22,8 +86,7 @@
       openaiPath: "/api/coding/paas/v4",
       regions: { intl: { host: "api.z.ai", label: { en: "Z.AI (international)", ru: "Z.AI (\u043C\u0435\u0436\u0434\u0443\u043D\u0430\u0440\u043E\u0434\u043D\u044B\u0439)" } }, cn: { host: "open.bigmodel.cn", label: { en: "BigModel (China)", ru: "BigModel (\u041A\u0438\u0442\u0430\u0439)" } } },
       legacyHosts: {},
-      model: "glm-5.3",
-      smallModel: "glm-5.3-flash",
+      ...defaultModels("glm", BUNDLED_MODELS.glm),
       preset: "zai-anthropic",
       presets: ["zai-anthropic", "zai-openai"]
     },
@@ -33,8 +96,7 @@
       openaiPath: "/v1",
       regions: { intl: { host: "api.minimax.io", label: { en: "minimax.io (international)", ru: "minimax.io (\u043C\u0435\u0436\u0434\u0443\u043D\u0430\u0440\u043E\u0434\u043D\u044B\u0439)" } }, cn: { host: "api.minimax.cn", label: { en: "minimax.cn (China)", ru: "minimax.cn (\u041A\u0438\u0442\u0430\u0439)" } } },
       legacyHosts: { "api.minimaxi.com": "cn" },
-      model: "MiniMax-M3.1-Flash",
-      smallModel: "MiniMax-M3.1-Flash",
+      ...defaultModels("minimax", BUNDLED_MODELS.minimax),
       preset: "minimax-anthropic",
       presets: ["minimax-anthropic", "minimax-openai"]
     }
@@ -124,12 +186,12 @@
     { id: "ollama-local", label: "Ollama \xB7 this computer", protocol: "ollama", baseUrl: OLLAMA_LOCAL_URL, ollama: "local", model: "qwen3.5:9b" },
     { id: "ollama-cloud-local", label: "Ollama Cloud \xB7 through this computer's Ollama", protocol: "ollama", baseUrl: OLLAMA_LOCAL_URL, ollama: "cloud-local", model: "gpt-oss:120b-cloud" },
     { id: "ollama-cloud", label: "Ollama Cloud \xB7 ollama.com key", protocol: "ollama", baseUrl: OLLAMA_CLOUD_URL, ollama: "cloud-direct", model: "gpt-oss:120b" },
-    { id: "zai-anthropic", label: "Z.AI \xB7 Anthropic API", protocol: "anthropic", baseUrl: "https://api.z.ai/api/anthropic", model: "glm-4.6" },
-    { id: "zai-openai", label: "Z.AI \xB7 OpenAI API", protocol: "openai", baseUrl: "https://api.z.ai/api/paas/v4", model: "glm-4.6" },
-    { id: "minimax-anthropic", label: "MiniMax \xB7 Anthropic API", protocol: "anthropic", baseUrl: "https://api.minimax.io/anthropic", model: "MiniMax-M2" },
-    { id: "minimax-openai", label: "MiniMax \xB7 OpenAI API", protocol: "openai", baseUrl: "https://api.minimax.io/v1", model: "MiniMax-M2" },
-    { id: "openrouter-openai", label: "OpenRouter \xB7 OpenAI API", protocol: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "z-ai/glm-4.6" },
-    { id: "openrouter-anthropic", label: "OpenRouter \xB7 Anthropic API", protocol: "anthropic", baseUrl: "https://openrouter.ai/api", model: "z-ai/glm-4.6" },
+    { id: "zai-anthropic", label: "Z.AI \xB7 Anthropic API", protocol: "anthropic", baseUrl: "https://api.z.ai/api/anthropic", model: BUNDLED_MODELS.glm[0] },
+    { id: "zai-openai", label: "Z.AI \xB7 OpenAI API", protocol: "openai", baseUrl: "https://api.z.ai/api/paas/v4", model: BUNDLED_MODELS.glm[0] },
+    { id: "minimax-anthropic", label: "MiniMax \xB7 Anthropic API", protocol: "anthropic", baseUrl: "https://api.minimax.io/anthropic", model: BUNDLED_MODELS.minimax[0] },
+    { id: "minimax-openai", label: "MiniMax \xB7 OpenAI API", protocol: "openai", baseUrl: "https://api.minimax.io/v1", model: BUNDLED_MODELS.minimax[0] },
+    { id: "openrouter-openai", label: "OpenRouter \xB7 OpenAI API", protocol: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "z-ai/glm-5.3" },
+    { id: "openrouter-anthropic", label: "OpenRouter \xB7 Anthropic API", protocol: "anthropic", baseUrl: "https://openrouter.ai/api", model: "z-ai/glm-5.3" },
     { id: "custom-anthropic", label: "Other Anthropic-compatible API", protocol: "anthropic", baseUrl: null, model: "" },
     { id: "custom-openai", label: "Other OpenAI-compatible API", protocol: "openai", baseUrl: null, model: "" }
   ]);
@@ -266,7 +328,18 @@
       planAdd: "Add subscription",
       planKeyFirst: "Paste the plan's API key first.",
       planHost: (host2) => `key sent only to ${host2}`,
-      planRunning: (running, cap) => `${running} of ${cap} cards running`
+      planRunning: (running, cap) => `${running} of ${cap} cards running`,
+      mainModel: "Model",
+      smallModel: "Small model (Claude Code's Haiku slot, OpenCode's titles)",
+      newest: (id) => `Newest on the plan's list (now ${id})`,
+      notListed: "not on the plan's list",
+      listLive: (host2, age) => `Models: the plan's own list from ${host2}, ${age}; read again daily and with Read now.`,
+      listBundled: (checked) => `Models: the plugin's built-in list (checked ${checked}) until the plan's own list is read.`,
+      listAge: (minutes) => minutes < 1 ? "read just now" : minutes < 120 ? `read ${minutes} min ago` : `read ${Math.round(minutes / 60)} h ago`,
+      modelsMoved: "Plan accounts moved to newer models",
+      modelMoved: (notice) => `${notice.label}: ${notice.from.model} \u2192 ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, small ${notice.from.smallModel} \u2192 ${notice.to.smallModel}` : ""}` + (notice.reason === "older" ? " (the old model is older than every model the plan lists now)." : " (a newer model is on the plan's list)."),
+      modelsMovedWhy: "No model was chosen for these accounts (or the plugin cannot tell whether one was), so they follow the plan's list. Choose a model on the account to keep it.",
+      ok: "OK"
     },
     ru: {
       title: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u043C\u043E\u0434\u0435\u043B\u0435\u0439",
@@ -343,7 +416,18 @@
       planAdd: "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043F\u043E\u0434\u043F\u0438\u0441\u043A\u0443",
       planKeyFirst: "\u0421\u043D\u0430\u0447\u0430\u043B\u0430 \u0432\u0441\u0442\u0430\u0432\u044C\u0442\u0435 API-\u043A\u043B\u044E\u0447 \u0442\u0430\u0440\u0438\u0444\u0430.",
       planHost: (host2) => `\u043A\u043B\u044E\u0447 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 ${host2}`,
-      planRunning: (running, cap) => `\u0437\u0430\u043F\u0443\u0449\u0435\u043D\u043E \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A: ${running} \u0438\u0437 ${cap}`
+      planRunning: (running, cap) => `\u0437\u0430\u043F\u0443\u0449\u0435\u043D\u043E \u043A\u0430\u0440\u0442\u043E\u0447\u0435\u043A: ${running} \u0438\u0437 ${cap}`,
+      mainModel: "\u041C\u043E\u0434\u0435\u043B\u044C",
+      smallModel: "\u041C\u0430\u043B\u0430\u044F \u043C\u043E\u0434\u0435\u043B\u044C (\u0441\u043B\u043E\u0442 Haiku \u0432 Claude Code, \u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043A\u0438 \u0432 OpenCode)",
+      newest: (id) => `\u0421\u0430\u043C\u0430\u044F \u043D\u043E\u0432\u0430\u044F \u0438\u0437 \u0441\u043F\u0438\u0441\u043A\u0430 \u0442\u0430\u0440\u0438\u0444\u0430 (\u0441\u0435\u0439\u0447\u0430\u0441 ${id})`,
+      notListed: "\u043D\u0435\u0442 \u0432 \u0441\u043F\u0438\u0441\u043A\u0435 \u0442\u0430\u0440\u0438\u0444\u0430",
+      listLive: (host2, age) => `\u041C\u043E\u0434\u0435\u043B\u0438: \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u0442\u0430\u0440\u0438\u0444\u0430 \u0441 ${host2}, ${age}; \u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0437\u0430\u043D\u043E\u0432\u043E \u0440\u0430\u0437 \u0432 \u0441\u0443\u0442\u043A\u0438 \u0438 \u043F\u043E \xAB\u041F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C \u0441\u0435\u0439\u0447\u0430\u0441\xBB.`,
+      listBundled: (checked) => `\u041C\u043E\u0434\u0435\u043B\u0438: \u0432\u0441\u0442\u0440\u043E\u0435\u043D\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u043F\u043B\u0430\u0433\u0438\u043D\u0430 (\u043F\u0440\u043E\u0432\u0435\u0440\u0435\u043D ${checked}), \u043F\u043E\u043A\u0430 \u043D\u0435 \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D \u0441\u043E\u0431\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0439 \u0441\u043F\u0438\u0441\u043E\u043A \u0442\u0430\u0440\u0438\u0444\u0430.`,
+      listAge: (minutes) => minutes < 1 ? "\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0442\u043E" : minutes < 120 ? `\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D ${minutes} \u043C\u0438\u043D \u043D\u0430\u0437\u0430\u0434` : `\u043F\u0440\u043E\u0447\u0438\u0442\u0430\u043D ${Math.round(minutes / 60)} \u0447 \u043D\u0430\u0437\u0430\u0434`,
+      modelsMoved: "\u0423\u0447\u0451\u0442\u043D\u044B\u0435 \u0437\u0430\u043F\u0438\u0441\u0438 \u0442\u0430\u0440\u0438\u0444\u043E\u0432 \u043F\u0435\u0440\u0435\u0432\u0435\u0434\u0435\u043D\u044B \u043D\u0430 \u0431\u043E\u043B\u0435\u0435 \u043D\u043E\u0432\u044B\u0435 \u043C\u043E\u0434\u0435\u043B\u0438",
+      modelMoved: (notice) => `${notice.label}: ${notice.from.model} \u2192 ${notice.to.model}${notice.from.smallModel !== notice.to.smallModel ? `, \u043C\u0430\u043B\u0430\u044F ${notice.from.smallModel} \u2192 ${notice.to.smallModel}` : ""}` + (notice.reason === "older" ? " (\u0441\u0442\u0430\u0440\u0430\u044F \u043C\u043E\u0434\u0435\u043B\u044C \u0441\u0442\u0430\u0440\u0448\u0435 \u0432\u0441\u0435\u0445 \u043C\u043E\u0434\u0435\u043B\u0435\u0439, \u043A\u043E\u0442\u043E\u0440\u044B\u0435 \u0442\u0430\u0440\u0438\u0444 \u043F\u0435\u0440\u0435\u0447\u0438\u0441\u043B\u044F\u0435\u0442 \u0441\u0435\u0439\u0447\u0430\u0441)." : " (\u0432 \u0441\u043F\u0438\u0441\u043A\u0435 \u0442\u0430\u0440\u0438\u0444\u0430 \u043F\u043E\u044F\u0432\u0438\u043B\u0430\u0441\u044C \u0431\u043E\u043B\u0435\u0435 \u043D\u043E\u0432\u0430\u044F \u043C\u043E\u0434\u0435\u043B\u044C)."),
+      modelsMovedWhy: "\u0414\u043B\u044F \u044D\u0442\u0438\u0445 \u0443\u0447\u0451\u0442\u043D\u044B\u0445 \u0437\u0430\u043F\u0438\u0441\u0435\u0439 \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0432\u044B\u0431\u0438\u0440\u0430\u043B\u0430\u0441\u044C (\u0438\u043B\u0438 \u043F\u043B\u0430\u0433\u0438\u043D \u043D\u0435 \u043C\u043E\u0436\u0435\u0442 \u044D\u0442\u043E \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C), \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043E\u043D\u0438 \u0441\u043B\u0435\u0434\u0443\u044E\u0442 \u0441\u043F\u0438\u0441\u043A\u0443 \u0442\u0430\u0440\u0438\u0444\u0430. \u0427\u0442\u043E\u0431\u044B \u043E\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u043C\u043E\u0434\u0435\u043B\u044C, \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0435\u0451 \u0432 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438.",
+      ok: "\u041F\u043E\u043D\u044F\u0442\u043D\u043E"
     }
   };
   var KEY_PROBLEM = {
@@ -653,6 +737,8 @@
     }
     if (plans) {
       section.append(el("p", { className: "muted", textContent: t.plansLead }));
+      const notices = modelNotices(state.modelNotices ?? []);
+      if (notices) section.append(notices);
       for (const entry of plans.providers) section.append(planBlock(entry));
     }
     section.append(
@@ -711,7 +797,7 @@
       "div",
       { className: "row" },
       el("strong", { textContent: account.label }),
-      el("span", { className: "muted", textContent: [regionLabel, account.model, info ? t.planHost(info.host) : null, info ? t.planRunning(info.running, info.concurrency) : null].filter(Boolean).join(" \xB7 ") })
+      el("span", { className: "muted", textContent: [regionLabel, account.smallModel ? `${account.model} / ${account.smallModel}` : account.model, info ? t.planHost(info.host) : null, info ? t.planRunning(info.running, info.concurrency) : null].filter(Boolean).join(" \xB7 ") })
     ));
     item.append(keyRow(account));
     const quota = state.quota?.[account.id];
@@ -727,17 +813,41 @@
     const label = el("input", { value: account.label, name: `plan-label-${account.id}` });
     const cap = el("input", { type: "number", min: "1", max: String(MAX_CONCURRENCY), value: String(account.concurrency ?? DEFAULT_CONCURRENCY), name: `plan-concurrency-${account.id}` });
     const auto = el("input", { type: "checkbox", checked: account.brokerable === true, name: `plan-auto-${account.id}` });
+    const list = state.models?.[account.id];
+    const main = modelSelect(`plan-model-${account.id}`, info?.provider, list, list?.defaults.model ?? account.model, account.modelPinned === true ? account.model : null);
+    const small = modelSelect(
+      `plan-small-model-${account.id}`,
+      info?.provider,
+      list,
+      list?.defaults.smallModel ?? account.smallModel ?? account.model,
+      account.smallModelPinned === true ? account.smallModel ?? account.model : null
+    );
+    item.append(el("div", { className: "row" }, field(t.mainModel, main), field(t.smallModel, small)));
+    if (list) {
+      const age = list.readAt === null ? null : Math.max(0, Math.round((Date.now() - list.readAt) / 6e4));
+      item.append(el("div", { className: "row", dataset: { models: account.id } }, el("span", { className: "muted", textContent: (list.source === "live" && age !== null ? t.listLive(info?.host ?? "", t.listAge(age)) : t.listBundled(BUNDLED_CHECKED)) + (list.note ? ` (${list.note})` : "") })));
+    }
     item.append(
       el("div", { className: "row" }, field(t.name, label), field(t.concurrency, cap)),
       el("div", { className: "row" }, el("label", { className: "check" }, auto, ` ${t.forAuto}`)),
       el(
         "div",
         { className: "row" },
-        button(t.saveChanges, `plan-save-${account.id}`, () => void saveAccounts((accounts) => accounts.map((entry) => entry.id !== account.id ? entry : {
-          ...entry,
-          label: label.value.trim(),
-          concurrency: Number(cap.value),
-          brokerable: auto.checked
+        button(t.saveChanges, `plan-save-${account.id}`, () => void saveAccounts((accounts) => accounts.map((entry) => {
+          if (entry.id !== account.id) return entry;
+          const { modelPinned: _m, smallModelPinned: _s, ...rest } = entry;
+          const model = main.value || entry.model;
+          const smallModel = small.value || entry.smallModel;
+          return {
+            ...rest,
+            label: label.value.trim(),
+            concurrency: Number(cap.value),
+            brokerable: auto.checked,
+            model,
+            ...smallModel && smallModel !== model ? { smallModel } : { smallModel: void 0 },
+            ...main.value ? { modelPinned: true } : {},
+            ...small.value ? { smallModelPinned: true } : {}
+          };
         }))),
         button(t.remove, `plan-remove-${account.id}`, async () => {
           if (!await saveAccounts((accounts) => accounts.filter((entry) => entry.id !== account.id))) return;
@@ -746,6 +856,31 @@
       )
     );
     return item;
+  }
+  function modelSelect(name, provider, list, newest, pinned) {
+    const select = el("select", { name });
+    select.append(el("option", { value: "", textContent: t.newest(newest), selected: pinned === null }));
+    const models = list ? [...list.models] : [];
+    if (pinned && !models.some((id) => id.toLowerCase() === pinned.toLowerCase())) models.push(pinned);
+    for (const id of provider ? sortModels(provider, models) : models) {
+      const off = !list?.models.some((entry) => entry.toLowerCase() === id.toLowerCase());
+      select.append(el("option", { value: id, textContent: off ? `${id} \u2014 ${t.notListed}` : id, selected: pinned !== null && pinned.toLowerCase() === id.toLowerCase() }));
+    }
+    return select;
+  }
+  function modelNotices(notices) {
+    if (!notices.length) return null;
+    const box = el("div", { className: "add", dataset: { modelNotices: String(notices.length) } }, el("strong", { textContent: t.modelsMoved }));
+    const list = el("ul", { className: "accounts" });
+    for (const notice of notices) list.append(el("li", { textContent: t.modelMoved(notice) }));
+    box.append(
+      list,
+      el("p", { className: "muted", textContent: t.modelsMovedWhy }),
+      el("div", { className: "row" }, button(t.ok, "model-notices-seen", () => {
+        host.service.request(SERVICE, "modelNoticesSeen").then(() => load(), (error) => say(errorText(error)));
+      }))
+    );
+    return box;
   }
   function planBlock(entry) {
     const members = state.settings.accounts.filter((account) => state.plans?.accounts[account.id]?.provider === entry.provider);

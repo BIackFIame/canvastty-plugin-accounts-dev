@@ -34,7 +34,7 @@ async function fixture(t, { ollama: ollamaOptions } = {}) {
   const service = new AccountsService({ host, dataDir });
   const accounts = [
     { id: 'qwen-local', label: 'Qwen local', preset: 'ollama-local', baseUrl: ollama.url, model: 'qwen3.5:9b', agents: ['claude', 'codex', 'opencode'] },
-    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude', 'opencode'] }
+    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude', 'opencode'] }
   ];
   await service.save({ version: 1, accounts });
   const context = (patch = {}) => ({ sessionId: 's1', provider: 'claude', profile: 'normal', role: 'agent', cwd: project, restoring: false, resume: false,
@@ -45,8 +45,10 @@ async function fixture(t, { ollama: ollamaOptions } = {}) {
 test('the launcher lists the accounts the person allowed for each agent', async (t) => {
   const { service } = await fixture(t);
   // The Z.AI account is a GLM Coding Plan account: listed by name and as the plan's pool for Claude Code and OpenCode.
-  assert.deepEqual(service.launchOptions('claude'), { account: [{ value: 'qwen-local', label: 'Qwen local · qwen3.5:9b' }, { value: 'glm', label: 'GLM · glm-4.6' },
-    { value: 'pool:glm', label: 'GLM Coding Plan pool · the account with the most room (1)' }] });
+  assert.deepEqual(service.launchOptions('claude'), { account: [{ value: 'qwen-local', label: 'Qwen local · qwen3.5:9b' }, { value: 'glm', label: 'GLM · glm-5.3' },
+    { value: 'pool:glm', label: 'GLM Coding Plan pool · the account with the most room (1)' }],
+  // The launcher's Model lists the plan's models (the bundled list here: no network in tests).
+  model: [{ value: 'glm-5.3', label: 'GLM Coding Plan · glm-5.3' }, { value: 'glm-5.3-flash', label: 'GLM Coding Plan · glm-5.3-flash' }] });
   assert.deepEqual(service.launchOptions('codex').account.map(option => option.value), ['qwen-local']);
   assert.deepEqual(service.launchOptions('qwen'), { account: [] });
   assert.deepEqual(service.launchOptions('terminal'), { account: [] });
@@ -204,7 +206,7 @@ test('removing an account removes its agent homes and its key binding', async (t
 test('orchestrator tools: list_routes says what is ready and why not; pick_account skips accounts that cannot work now', async (t) => {
   const { service, secrets, ollama } = await fixture(t);
   await service.save({ version: 1, accounts: [
-    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude'] },
+    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude'] },
     { id: 'gone-model', label: 'Llama', preset: 'ollama-local', baseUrl: ollama.url, model: 'llama9:1b', agents: ['claude'] },
     ...service.settings.accounts.filter(entry => entry.id === 'qwen-local')
   ] });
@@ -256,7 +258,7 @@ test('orchestrator tools: list_routes checks the effort like pick_account does',
 });
 
 test('routes: accounts are probed a few at a time, in order, and one no agent asked for is not probed', async () => {
-  const accounts = Array.from({ length: 9 }, (_, i) => ({ id: `a${i}`, label: `A${i}`, preset: 'custom-anthropic', baseUrl: 'https://llm.example.test/anthropic', model: 'glm-4.6', agents: [i === 8 ? 'opencode' : 'claude'] }));
+  const accounts = Array.from({ length: 9 }, (_, i) => ({ id: `a${i}`, label: `A${i}`, preset: 'custom-anthropic', baseUrl: 'https://llm.example.test/anthropic', model: 'glm-5.3', agents: [i === 8 ? 'opencode' : 'claude'] }));
   let active = 0, most = 0;
   const asked = [];
   const facts = {
@@ -345,7 +347,7 @@ test('a save or key binding the host fails to store changes nothing in memory or
 
 test('the settings page reads every account\'s key at once, not one after another', async (t) => {
   const { service, host } = await fixture(t);
-  const accounts = Array.from({ length: 6 }, (_, n) => ({ id: `k${n}`, label: `K${n}`, preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude'] }));
+  const accounts = Array.from({ length: 6 }, (_, n) => ({ id: `k${n}`, label: `K${n}`, preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude'] }));
   await service.save({ version: 1, accounts });
   const real = host.callHost;
   let running = 0, most = 0;
@@ -379,8 +381,8 @@ test('an Ollama answer without Content-Length is cut off at the size cap while i
 test('OpenRouter accounts: refused for a subagent, still the person\'s own choice, never offered as a route', async (t) => {
   const { service, secrets, context, host } = await fixture(t);
   await service.save({ version: 1, accounts: [
-    { id: 'or', label: 'OR', preset: 'openrouter-anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-4.6', agents: ['claude', 'opencode'] },
-    { id: 'or-custom', label: 'OR custom', preset: 'custom-openai', baseUrl: 'https://eu.openrouter.ai/api/v1', model: 'z-ai/glm-4.6', agents: ['opencode'] },
+    { id: 'or', label: 'OR', preset: 'openrouter-anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-5.3', agents: ['claude', 'opencode'] },
+    { id: 'or-custom', label: 'OR custom', preset: 'custom-openai', baseUrl: 'https://eu.openrouter.ai/api/v1', model: 'z-ai/glm-5.3', agents: ['opencode'] },
     ...service.settings.accounts
   ] });
   secrets['key.or'] = KEY; secrets['key.or-custom'] = KEY; secrets['key.glm'] = KEY;
@@ -416,7 +418,7 @@ test('OpenRouter accounts: refused for a subagent, still the person\'s own choic
   }
   const pick = (await service.tool('pick_account', { provider: 'opencode', source: 'accounts' })).content;
   assert.equal(pick.accountId, 'qwen-local');
-  assert.match(pick.why, /skipped OR \(z-ai\/glm-4\.6\): OpenRouter is for Jev's decisions only/);
+  assert.match(pick.why, /skipped OR \(z-ai\/glm-5\.3\): OpenRouter is for Jev's decisions only/);
   // With only OpenRouter accounts there is no route at all.
   await service.save({ version: 1, accounts: service.settings.accounts.filter(entry => entry.id.startsWith('or')) });
   const none = await service.tool('pick_account', { provider: 'opencode' });

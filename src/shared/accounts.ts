@@ -7,6 +7,7 @@
  */
 import { parseOllamaModelRef, validOllamaModelName } from './ollamaModelRef.ts';
 import { MAX_CONCURRENCY, planOf } from '../plans/plans.ts';
+import { BUNDLED_MODELS } from '../plans/models.ts';
 import { DATA_CLASSES, type PoolTrust } from '../pools/model.ts';
 
 /** The agent CLIs an account can drive, each through per-run environment, flags and files CanvasTTY owns. */
@@ -41,12 +42,12 @@ export const PRESETS: readonly Preset[] = Object.freeze([
   { id: 'ollama-local', label: 'Ollama · this computer', protocol: 'ollama', baseUrl: OLLAMA_LOCAL_URL, ollama: 'local', model: 'qwen3.5:9b' },
   { id: 'ollama-cloud-local', label: 'Ollama Cloud · through this computer\'s Ollama', protocol: 'ollama', baseUrl: OLLAMA_LOCAL_URL, ollama: 'cloud-local', model: 'gpt-oss:120b-cloud' },
   { id: 'ollama-cloud', label: 'Ollama Cloud · ollama.com key', protocol: 'ollama', baseUrl: OLLAMA_CLOUD_URL, ollama: 'cloud-direct', model: 'gpt-oss:120b' },
-  { id: 'zai-anthropic', label: 'Z.AI · Anthropic API', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6' },
-  { id: 'zai-openai', label: 'Z.AI · OpenAI API', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6' },
-  { id: 'minimax-anthropic', label: 'MiniMax · Anthropic API', protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2' },
-  { id: 'minimax-openai', label: 'MiniMax · OpenAI API', protocol: 'openai', baseUrl: 'https://api.minimax.io/v1', model: 'MiniMax-M2' },
-  { id: 'openrouter-openai', label: 'OpenRouter · OpenAI API', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-4.6' },
-  { id: 'openrouter-anthropic', label: 'OpenRouter · Anthropic API', protocol: 'anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-4.6' },
+  { id: 'zai-anthropic', label: 'Z.AI · Anthropic API', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: BUNDLED_MODELS.glm[0]! },
+  { id: 'zai-openai', label: 'Z.AI · OpenAI API', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: BUNDLED_MODELS.glm[0]! },
+  { id: 'minimax-anthropic', label: 'MiniMax · Anthropic API', protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: BUNDLED_MODELS.minimax[0]! },
+  { id: 'minimax-openai', label: 'MiniMax · OpenAI API', protocol: 'openai', baseUrl: 'https://api.minimax.io/v1', model: BUNDLED_MODELS.minimax[0]! },
+  { id: 'openrouter-openai', label: 'OpenRouter · OpenAI API', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5.3' },
+  { id: 'openrouter-anthropic', label: 'OpenRouter · Anthropic API', protocol: 'anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-5.3' },
   { id: 'custom-anthropic', label: 'Other Anthropic-compatible API', protocol: 'anthropic', baseUrl: null, model: '' },
   { id: 'custom-openai', label: 'Other OpenAI-compatible API', protocol: 'openai', baseUrl: null, model: '' }
 ] satisfies Preset[]);
@@ -91,6 +92,12 @@ export interface Account {
   trust?: PoolTrust;
   concurrency?: number;
   smallModel?: string;
+  /**
+   * Coding-plan accounts only: the person chose `model` (or `smallModel`) from the plan's list. Without it the slot
+   * follows the plan's list: the newest model (plans/models.ts), updated when a newer one appears.
+   */
+  modelPinned?: boolean;
+  smallModelPinned?: boolean;
 }
 
 export interface AccountsSettings { version: 1; accounts: Account[] }
@@ -176,7 +183,7 @@ const plainText = (value: unknown, max: number): value is string => typeof value
 export function validateAccount(value: unknown): Account {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('An account must be an object.');
   const raw = value as Record<string, unknown>;
-  const unknown = Object.keys(raw).find(key => !['id', 'label', 'preset', 'baseUrl', 'model', 'responsesApi', 'agents', 'brokerable', 'trust', 'concurrency', 'smallModel'].includes(key));
+  const unknown = Object.keys(raw).find(key => !['id', 'label', 'preset', 'baseUrl', 'model', 'responsesApi', 'agents', 'brokerable', 'trust', 'concurrency', 'smallModel', 'modelPinned', 'smallModelPinned'].includes(key));
   if (unknown) throw new Error(`Unknown account field ${unknown.slice(0, 40)}.`);
   if (typeof raw.id !== 'string' || !ID.test(raw.id)) throw new Error('Account id must be 1–40 lowercase letters, digits or dashes.');
   if (!plainText(raw.label, 80)) throw new Error('Give the account a name (at most 80 characters).');
@@ -222,7 +229,10 @@ export function validateAccount(value: unknown): Account {
     throw new Error(decisionsOnlyAccount({ preset: preset.id, baseUrl }) ? `${DECISIONS_ONLY_REASON}.` : 'Only an https API account with a key can be used by other extensions.');
   }
   const plan = planOf({ preset: preset.id, baseUrl });
-  if (!plan && (raw.trust !== undefined || raw.concurrency !== undefined || raw.smallModel !== undefined)) throw new Error('Only a coding-plan account (GLM, MiniMax) has a data level, a card limit or a small model.');
+  if (!plan && (raw.trust !== undefined || raw.concurrency !== undefined || raw.smallModel !== undefined || raw.modelPinned !== undefined || raw.smallModelPinned !== undefined)) {
+    throw new Error('Only a coding-plan account (GLM, MiniMax) has a data level, a card limit, a small model or a model chosen from the plan\'s list.');
+  }
+  for (const flag of ['modelPinned', 'smallModelPinned'] as const) if (raw[flag] !== undefined && typeof raw[flag] !== 'boolean') throw new Error(`${flag} must be true or false.`);
   if (raw.trust !== undefined && raw.trust !== 'unset' && !(DATA_CLASSES as readonly unknown[]).includes(raw.trust)) throw new Error('Choose how far you trust the account: not set, D0, D1, D2 or D3.');
   if (raw.concurrency !== undefined && !(typeof raw.concurrency === 'number' && Number.isInteger(raw.concurrency) && raw.concurrency >= 1 && raw.concurrency <= MAX_CONCURRENCY)) {
     throw new Error(`Cards at once must be a whole number from 1 to ${MAX_CONCURRENCY}.`);
@@ -235,7 +245,8 @@ export function validateAccount(value: unknown): Account {
   return {
     id: raw.id, label: raw.label.trim(), preset: preset.id, baseUrl, model, ...(responsesApi ? { responsesApi } : {}), agents, ...(brokerable ? { brokerable } : {}),
     ...(plan && raw.trust !== undefined ? { trust: raw.trust as PoolTrust } : {}), ...(plan && raw.concurrency !== undefined ? { concurrency: raw.concurrency as number } : {}),
-    ...(smallModel && smallModel !== model ? { smallModel } : {})
+    ...(smallModel && smallModel !== model ? { smallModel } : {}),
+    ...(plan && raw.modelPinned === true ? { modelPinned: true } : {}), ...(plan && raw.smallModelPinned === true ? { smallModelPinned: true } : {})
   };
 }
 
@@ -262,11 +273,11 @@ export interface BrokerOffer {
 }
 
 /**
- * The offer for one account the person marked. Anthropic-compatible endpoints take `<base>/v1/messages` (as Claude
+ * The offer for one account the person marked (`listed`: a coding plan account's model list). Anthropic-compatible endpoints take `<base>/v1/messages` (as Claude
  * Code calls them, with the key as a Bearer token); OpenAI-compatible ones `<base>/chat/completions`, `/models` and,
  * when the endpoint has it, `/responses`.
  */
-export function brokerOfferOf(account: Account, flatRate: boolean): BrokerOffer | null {
+export function brokerOfferOf(account: Account, flatRate: boolean, listed: readonly string[] = []): BrokerOffer | null {
   if (account.brokerable !== true || !brokerableShape(account)) return null;
   const protocol = protocolOf(account) as 'openai' | 'anthropic';
   return {
@@ -275,7 +286,8 @@ export function brokerOfferOf(account: Account, flatRate: boolean): BrokerOffer 
     protocol,
     baseUrl: protocol === 'anthropic' ? `${account.baseUrl}/v1` : account.baseUrl,
     paths: protocol === 'anthropic' ? ['/messages'] : ['/chat/completions', ...(account.responsesApi ? ['/responses'] : []), '/models'],
-    models: [account.model, ...(account.smallModel ? [account.smallModel] : [])],
+    // The account's models, then the rest of a coding plan's list (CanvasTTY takes at most 64).
+    models: [...new Set([account.model, ...(account.smallModel ? [account.smallModel] : []), ...listed])].slice(0, 64),
     secretKey: secretKeyOf(account.id),
     auth: 'bearer',
     flatRate

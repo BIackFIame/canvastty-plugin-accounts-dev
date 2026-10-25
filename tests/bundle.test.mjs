@@ -45,7 +45,8 @@ test('the manifest passes CanvasTTY\'s own validator (when CANVASTTY_REPO points
 });
 
 function startService(t, { dataDir, host = {} }) {
-  const child = spawn(process.execPath, [join(root, 'services', 'accounts.mjs')], { cwd: root, env: { PATH: process.env.PATH, HOME: base }, stdio: ['pipe', 'pipe', 'inherit'] });
+  // No provider is ever contacted from a test: a saved key would otherwise start a model-list read on the plan's host.
+  const child = spawn(process.execPath, [join(root, 'services', 'accounts.mjs')], { cwd: root, env: { PATH: process.env.PATH, HOME: base, CANVASTTY_ACCOUNTS_NO_NETWORK: '1' }, stdio: ['pipe', 'pipe', 'inherit'] });
   t.after(() => child.kill());
   const waiting = new Map();
   let nextId = 1;
@@ -93,10 +94,11 @@ test('end to end over JSON-RPC: the page saves accounts, the launcher lists them
   assert.deepEqual((await service.request('state')).settings.accounts, []);
   await service.request('save', { settings: { version: 1, accounts: [
     { id: 'qwen', label: 'Qwen', preset: 'ollama-local', baseUrl: ollama.url, model: 'qwen3.5:9b', agents: ['claude', 'codex'] },
-    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude'] }
+    { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude'] }
   ] } });
   await service.request('keyChanged', { accountId: 'glm' });
   assert.equal(storage.accounts.keyOrigins.glm, 'https://api.z.ai');
+  assert.equal((await service.request('state')).models.glm.source, 'bundled', 'no model list was read (no network in tests)');
   assert.deepEqual((await service.request('canvastty.launch.options', { provider: 'codex', fields: ['account'] })).account, [{ value: 'qwen', label: 'Qwen · qwen3.5:9b' }]);
   const launch = await service.request('canvastty.launch.prepare', { sessionId: 's', provider: 'codex', profile: 'normal', role: 'agent', cwd: project, restoring: false, resume: false,
     options: { account: 'qwen', effort: 'default', trustFolder: false }, chosen: true, environment: null });
@@ -137,7 +139,7 @@ test('through CanvasTTY\'s own supervisor and launch pipeline: the launcher list
   });
   assert.deepEqual(await pipeline.fieldOptions(checked.id, 'claude'), { account: [{ value: 'qwen', label: 'Qwen · qwen3.5:9b' }] });
   const options = pipeline.normalizeOptions('claude', { [checked.id]: { account: 'qwen' } });
-  assert.deepEqual(options, { [checked.id]: { account: 'qwen', effort: 'default', trustFolder: false } });
+  assert.deepEqual(options, { [checked.id]: { account: 'qwen', model: 'default', effort: 'default', trustFolder: false } });
   // An orchestrator's spawn_agent launchOptions reach the plugin because it declared them delegable.
   assert.deepEqual(pipeline.normalizeOptions('claude', { [checked.id]: { account: 'qwen' } }, { delegated: true }), options);
   const prepared = await pipeline.prepare({ sessionId: 'e2e', provider: 'claude', profile: 'normal', role: 'agent', cwd: project, restoring: false, resume: false, environment: null, options });
@@ -158,7 +160,7 @@ test('through CanvasTTY\'s launch pipeline: OpenCode gets the pinned provider co
   const checked = validatePluginManifest(manifest);
   const storage = { accounts: { settings: { version: 1, accounts: [
     { id: 'qwen', label: 'Qwen', preset: 'ollama-local', baseUrl: ollama.url, model: 'qwen3.5:9b', agents: ['opencode'] },
-    { id: 'or', label: 'OR', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-4.6', agents: ['opencode'] }
+    { id: 'or', label: 'OR', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5.3', agents: ['opencode'] }
   ] }, keyOrigins: {} } };
   const supervisor = new PluginServiceSupervisor({
     command: process.execPath, hostVersion: '9.9.9', locale: () => 'en', stopGraceMs: 300,
@@ -217,10 +219,18 @@ test('through CanvasTTY\'s launch pipeline: pool:glm and pool:minimax for Claude
   });
   const listed = (await pipeline.fieldOptions(checked.id, 'opencode')).account.map(option => option.value);
   assert.deepEqual(listed, ['glm-old', 'mm', 'pool:glm', 'pool:minimax']);
+  // The launcher's Model: the plans' models (bundled lists here); the account saved with glm-4.6 runs the newest one.
+  assert.deepEqual((await pipeline.fieldOptions(checked.id, 'claude')).model.map(option => option.value), ['glm-5.3', 'glm-5.3-flash', 'MiniMax-M3.1-Flash', 'MiniMax-M3']);
+  const chosen = await pipeline.prepare({ sessionId: 'plan-0', provider: 'claude', profile: 'normal', role: 'agent', cwd: project, restoring: false, resume: false,
+    environment: null, options: pipeline.normalizeOptions('claude', { [checked.id]: { account: 'pool:glm', model: 'glm-5.3-flash' } }) });
+  assert.equal(chosen.ok, true, chosen.reason);
+  assert.equal(chosen.env.ANTHROPIC_MODEL, 'glm-5.3-flash');
+  await chosen.cleanup();
   const launch = (provider, account, session) => pipeline.prepare({ sessionId: session, provider, profile: 'normal', role: 'subagent', cwd: project, restoring: false, resume: false,
     environment: null, options: pipeline.normalizeOptions(provider, { [checked.id]: { account } }, { delegated: true }) });
   const claude = await launch('claude', 'pool:glm', 'plan-1');
   assert.equal(claude.ok, true, claude.reason);
+  assert.deepEqual([claude.env.ANTHROPIC_MODEL, claude.env.ANTHROPIC_DEFAULT_HAIKU_MODEL], ['glm-5.3', 'glm-5.3-flash']);
   assert.equal(claude.env.ANTHROPIC_BASE_URL, 'https://api.z.ai/api/anthropic');
   assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, `${KEY}-glm`);
   assert.deepEqual(claude.secrets, [`${KEY}-glm`], 'CanvasTTY masks it for the session');

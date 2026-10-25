@@ -6,13 +6,16 @@
  *
  * Endpoints (checked 2026-10-24 against the providers' own pages):
  * - GLM: docs.z.ai/devpack/quick-start (api.z.ai: /api/anthropic, /api/coding/paas/v4), docs.bigmodel.cn/cn/coding-plan/
- *   quick-start (open.bigmodel.cn: the same paths); models GLM-5.3 and GLM-5.3-Flash (docs.z.ai/devpack/tool/claude).
+ *   quick-start (open.bigmodel.cn: the same paths).
  * - MiniMax: platform.minimax.io/docs/token-plan/opencode (api.minimax.io: /anthropic, /v1), platform.minimax.cn/docs/
- *   token-plan/claude-code (api.minimax.cn/anthropic); model MiniMax-M3.1-Flash. api.minimaxi.com is MiniMax's older
- *   China host, still recognised for accounts saved with it.
+ *   token-plan/claude-code (api.minimax.cn/anthropic). api.minimaxi.com is MiniMax's older China host, still recognised
+ *   for accounts saved with it.
+ * Models: each account's own list from its host, or the bundled one (plans/models.ts); `model` / `smallModel` below are
+ * the bundled list's defaults, which a new account starts with.
  * A key is a plan's, so parallel cards on one account are fine (no refresh token to rotate); a per-account cap bounds them.
  */
 import type { Account, Harness, PresetId } from '../shared/accounts.ts';
+import { BUNDLED_MODELS, defaultModels } from './models.ts';
 
 export const PLAN_PROVIDERS = ['glm', 'minimax'] as const;
 export type PlanProvider = typeof PLAN_PROVIDERS[number];
@@ -43,12 +46,12 @@ export const PLAN_INFO: Readonly<Record<PlanProvider, PlanInfo>> = Object.freeze
   glm: {
     label: 'GLM Coding Plan', anthropicPath: '/api/anthropic', openaiPath: '/api/coding/paas/v4',
     regions: { intl: { host: 'api.z.ai', label: { en: 'Z.AI (international)', ru: 'Z.AI (международный)' } }, cn: { host: 'open.bigmodel.cn', label: { en: 'BigModel (China)', ru: 'BigModel (Китай)' } } },
-    legacyHosts: {}, model: 'glm-5.3', smallModel: 'glm-5.3-flash', preset: 'zai-anthropic', presets: ['zai-anthropic', 'zai-openai']
+    legacyHosts: {}, ...defaultModels('glm', BUNDLED_MODELS.glm), preset: 'zai-anthropic', presets: ['zai-anthropic', 'zai-openai']
   },
   minimax: {
     label: 'MiniMax Coding Plan', anthropicPath: '/anthropic', openaiPath: '/v1',
     regions: { intl: { host: 'api.minimax.io', label: { en: 'minimax.io (international)', ru: 'minimax.io (международный)' } }, cn: { host: 'api.minimax.cn', label: { en: 'minimax.cn (China)', ru: 'minimax.cn (Китай)' } } },
-    legacyHosts: { 'api.minimaxi.com': 'cn' }, model: 'MiniMax-M3.1-Flash', smallModel: 'MiniMax-M3.1-Flash', preset: 'minimax-anthropic', presets: ['minimax-anthropic', 'minimax-openai']
+    legacyHosts: { 'api.minimaxi.com': 'cn' }, ...defaultModels('minimax', BUNDLED_MODELS.minimax), preset: 'minimax-anthropic', presets: ['minimax-anthropic', 'minimax-openai']
   }
 });
 

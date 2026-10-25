@@ -395,7 +395,7 @@ test('without card events the one-card rule cannot hold, and the plugin says so 
 test('model accounts and pool accounts never share an id', async (t) => {
   const { service } = await fixture(t);
   const added = await service.poolAdd({ provider: 'grok', label: 'x', trust: 'D0' });
-  await assert.rejects(service.save({ version: 1, accounts: [{ id: added.id, label: 'Clash', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude'] }] }), /already the name of a pool account/);
+  await assert.rejects(service.save({ version: 1, accounts: [{ id: added.id, label: 'Clash', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude'] }] }), /already the name of a pool account/);
 });
 
 

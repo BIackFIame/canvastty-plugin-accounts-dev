@@ -34,7 +34,7 @@ test('Claude on local Ollama: server root, placeholder token, every model tier, 
 });
 
 test('Claude on an Anthropic-compatible API (Z.AI): the key only as a secret variable, never in argv or files', () => {
-  const plan = buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', secretKey: SECRET });
+  const plan = buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', secretKey: SECRET });
   assert.deepEqual(plan.secretEnv, { ANTHROPIC_AUTH_TOKEN: SECRET });
   assert.equal(plan.env.ANTHROPIC_AUTH_TOKEN, undefined);
   assert.equal(plan.env.ANTHROPIC_BASE_URL, 'https://api.z.ai/api/anthropic');
@@ -66,7 +66,7 @@ test('Codex on local Ollama: -c provider with the Responses wire API, a private 
 });
 
 test('Codex on a Responses endpoint with a key: env_key names the variable CanvasTTY fills from the secret', () => {
-  const plan = buildHarnessLaunch({ ...base, harness: 'codex', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-4.6', secretKey: SECRET });
+  const plan = buildHarnessLaunch({ ...base, harness: 'codex', protocol: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5.3', secretKey: SECRET });
   assert.ok(plan.args.includes(`model_providers.canvastty_abc.env_key="${MODEL_KEY_ENV}"`));
   assert.ok(plan.args.includes('model_providers.canvastty_abc.base_url="https://openrouter.ai/api/v1"'));
   assert.deepEqual(plan.secretEnv, { [MODEL_KEY_ENV]: SECRET });
@@ -75,15 +75,15 @@ test('Codex on a Responses endpoint with a key: env_key names the variable Canva
 });
 
 test('OpenCode: a private OPENCODE_CONFIG (CanvasTTY owns OPENCODE_CONFIG_CONTENT); Anthropic APIs get /v1 (L28)', () => {
-  const anthropic = buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2', secretKey: SECRET });
+  const anthropic = buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3', secretKey: SECRET });
   assert.deepEqual(anthropic.env, { OPENCODE_CONFIG: '{launchFiles}/opencode.json' });
   assert.deepEqual(anthropic.secretEnv, { [MODEL_KEY_ENV]: SECRET });
   const config = JSON.parse(anthropic.files[0].content);
   assert.equal(config.provider.canvastty_abc.npm, '@ai-sdk/anthropic');
   assert.equal(config.provider.canvastty_abc.options.baseURL, 'https://api.minimax.io/anthropic/v1');
   assert.equal(config.provider.canvastty_abc.options.apiKey, `{env:${MODEL_KEY_ENV}}`);
-  assert.equal(config.model, 'canvastty_abc/MiniMax-M2');
-  assert.deepEqual(anthropic.args, ['--model', 'canvastty_abc/MiniMax-M2']);
+  assert.equal(config.model, 'canvastty_abc/MiniMax-M3');
+  assert.deepEqual(anthropic.args, ['--model', 'canvastty_abc/MiniMax-M3']);
   assert.equal(openCodeAnthropicBase('https://x.test/v1/'), 'https://x.test/v1');
   const ollama = buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'ollama', ollamaShape: 'local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b:local', contextWindow: 65536 });
   const local = JSON.parse(ollama.files[0].content).provider.canvastty_abc;
@@ -96,8 +96,8 @@ test('OpenCode: a private OPENCODE_CONFIG (CanvasTTY owns OPENCODE_CONFIG_CONTEN
 
 test('OpenCode sees only the account\'s provider: enabled_providers and small_model on the account\'s own model', () => {
   for (const shape of [
-    { protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2', secretKey: SECRET },
-    { protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET },
+    { protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3', secretKey: SECRET },
+    { protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3', secretKey: SECRET },
     { protocol: 'ollama', ollamaShape: 'local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b:local' }
   ]) {
     const config = JSON.parse(buildHarnessLaunch({ ...base, harness: 'opencode', ...shape }).files[0].content);
@@ -128,14 +128,14 @@ test('a global OpenCode config naming other providers (OpenCode Zen, a collector
     agent: { title: { model: 'opencode/gpt-5-nano', temperature: 0.2 }, summary: { model: 'anthropic/claude-haiku-4-5' }, compaction: { model: 'collector/m' }, general: { model: 'collector/m' } },
     provider: { collector: { npm: '@ai-sdk/openai-compatible', options: { baseURL: 'https://collector.test/v1' }, models: { m: {} } } }
   };
-  const ours = JSON.parse(buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET }).files[0].content);
+  const ours = JSON.parse(buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3', secretKey: SECRET }).files[0].content);
   const effective = mergeConfig(global, ours);
   assert.deepEqual(effective.enabled_providers, ['canvastty_abc'], 'only the account\'s provider is loaded');
-  assert.equal(effective.model, 'canvastty_abc/glm-4.6');
-  assert.equal(effective.small_model, 'canvastty_abc/glm-4.6', 'title and summary calls stay on the account');
+  assert.equal(effective.model, 'canvastty_abc/glm-5.3');
+  assert.equal(effective.small_model, 'canvastty_abc/glm-5.3', 'title and summary calls stay on the account');
   // The global provider definitions remain in the merged file but are never loaded.
   for (const id of ['opencode', 'anthropic', 'collector']) assert.ok(!effective.enabled_providers.includes(id), id);
-  for (const name of OPENCODE_NATIVE_AGENTS) assert.equal(effective.agent[name].model, 'canvastty_abc/glm-4.6', `agent ${name}`);
+  for (const name of OPENCODE_NATIVE_AGENTS) assert.equal(effective.agent[name].model, 'canvastty_abc/glm-5.3', `agent ${name}`);
   assert.equal(effective.agent.title.temperature, 0.2, 'only the model is pinned; the person\'s other agent settings stay');
   // Without the pins (the earlier config) the global small model was OpenCode Zen's.
   const { enabled_providers: _e, small_model: _s, ...unpinned } = ours;
@@ -153,7 +153,7 @@ test('real OpenCode resolves only the account\'s provider (OPENCODE_BIN)', { ski
     agent: { title: { model: 'opencode/gpt-5-nano' }, summary: { model: 'collector/m' }, compaction: { model: 'collector/m' }, explore: { model: 'opencode/gpt-5-nano' } },
     provider: { collector: { npm: '@ai-sdk/openai-compatible', options: { baseURL: 'https://collector.test/v1' }, models: { m: { name: 'm' } } } }
   }));
-  const plan = buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET });
+  const plan = buildHarnessLaunch({ ...base, harness: 'opencode', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3', secretKey: SECRET });
   await writeFile(join(home, 'run/opencode.json'), plan.files[0].content);
   const env = { PATH: process.env.PATH, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'), XDG_CACHE_HOME: join(home, '.cache'),
     XDG_STATE_HOME: join(home, '.local/state'), TMPDIR: join(home, 'tmp'), OPENCODE_CONFIG: join(home, 'run/opencode.json'),
@@ -173,13 +173,13 @@ test('real OpenCode resolves only the account\'s provider (OPENCODE_BIN)', { ski
     } finally { await handle.close(); }
     return readFile(out, 'utf8');
   };
-  assert.deepEqual((await run(['models', '--pure'])).trim().split('\n'), ['canvastty_abc/glm-4.6']);
-  assert.match(await run(['debug', 'config', '--pure']), /"small_model": "canvastty_abc\/glm-4\.6"/);
+  assert.deepEqual((await run(['models', '--pure'])).trim().split('\n'), ['canvastty_abc/glm-5.3']);
+  assert.match(await run(['debug', 'config', '--pure']), /"small_model": "canvastty_abc\/glm-5\.3"/);
   // Every agent this OpenCode has is one the config pins (a new native agent would show up here).
   const agents = (await run(['agent', 'list', '--pure'])).split('\n').map(line => /^(\S+) \((?:primary|subagent|all)\)$/u.exec(line)?.[1]).filter(Boolean);
   assert.deepEqual([...agents].sort(), [...OPENCODE_NATIVE_AGENTS].sort());
   for (const name of OPENCODE_NATIVE_AGENTS) {
-    assert.deepEqual(JSON.parse(await run(['debug', 'agent', name, '--pure'])).model, { providerID: 'canvastty_abc', modelID: 'glm-4.6' }, name);
+    assert.deepEqual(JSON.parse(await run(['debug', 'agent', name, '--pure'])).model, { providerID: 'canvastty_abc', modelID: 'glm-5.3' }, name);
   }
 });
 
@@ -199,7 +199,7 @@ test('Qwen Code and Kimi: OPENAI_* or an openai_legacy alias; Kimi\'s key only i
   const qwen = buildHarnessLaunch({ ...base, harness: 'qwen', protocol: 'ollama', ollamaShape: 'local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b:local' });
   assert.deepEqual(qwen.args, ['--auth-type', 'openai', '--model', 'qwen3.5:9b:local']);
   assert.deepEqual(qwen.env, { OPENAI_BASE_URL: 'http://127.0.0.1:11434/v1', OPENAI_MODEL: 'qwen3.5:9b:local', OPENAI_API_KEY: 'ollama' });
-  const keyedQwen = buildHarnessLaunch({ ...base, harness: 'qwen', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET });
+  const keyedQwen = buildHarnessLaunch({ ...base, harness: 'qwen', protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3', secretKey: SECRET });
   assert.deepEqual(keyedQwen.secretEnv, { OPENAI_API_KEY: SECRET });
   assert.equal(keyedQwen.env.OPENAI_API_KEY, undefined);
   const kimi = buildHarnessLaunch({ ...base, harness: 'kimi', protocol: 'ollama', ollamaShape: 'local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b:local', contextWindow: 65536 });
@@ -231,9 +231,9 @@ test('no generated OpenCode, Kimi or Codex configuration carries an approval, pe
   assert.equal(String(APPROVAL_CONFIG_KEY), String(/permission|approv|yolo|sandbox|dangerous|bypass|auto_?accept|trust/i));
   const shapes = [
     { protocol: 'ollama', ollamaShape: 'local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b:local', contextWindow: 65536 },
-    { protocol: 'ollama', ollamaShape: 'cloud-direct', baseUrl: 'https://ollama.com', model: 'glm-4.6', secretKey: SECRET, keyValue: 'fixture-key' },
-    { protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-4.6', secretKey: SECRET, keyValue: 'fixture-key' },
-    { protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2', secretKey: SECRET, keyValue: 'fixture-key' }
+    { protocol: 'ollama', ollamaShape: 'cloud-direct', baseUrl: 'https://ollama.com', model: 'glm-5.3', secretKey: SECRET, keyValue: 'fixture-key' },
+    { protocol: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'glm-5.3', secretKey: SECRET, keyValue: 'fixture-key' },
+    { protocol: 'anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3', secretKey: SECRET, keyValue: 'fixture-key' }
   ];
   for (const shape of shapes) {
     const opencode = buildHarnessLaunch({ ...base, harness: 'opencode', ...shape });
@@ -257,8 +257,8 @@ test('no generated OpenCode, Kimi or Codex configuration carries an approval, pe
 });
 
 test('a keyed account never builds without its key; Ollama needs its checked shape', () => {
-  assert.throws(() => buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6' }), /needs a key/);
-  assert.throws(() => buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'ollama', ollamaShape: 'cloud-direct', baseUrl: 'https://ollama.com', model: 'glm-4.6' }), /needs a key/);
+  assert.throws(() => buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3' }), /needs a key/);
+  assert.throws(() => buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'ollama', ollamaShape: 'cloud-direct', baseUrl: 'https://ollama.com', model: 'glm-5.3' }), /needs a key/);
   assert.throws(() => buildHarnessLaunch({ ...base, harness: 'claude', protocol: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'x:local' }), /checked Ollama account/);
 });
 
@@ -283,14 +283,14 @@ test('accounts: presets decide the protocol, the agents that can use it and whet
   assert.throws(() => validateAccount(account({ preset: 'ollama-cloud-local', model: 'qwen3.5:9b' })), /not an Ollama Cloud name/);
   assert.equal(validateAccount(account({ preset: 'ollama-cloud-local', model: 'gpt-oss:120b-cloud' })).model, 'gpt-oss:120b-cloud');
   assert.throws(() => validateAccount(account({ preset: 'ollama-cloud', baseUrl: 'https://evil.test' })), /ollama\.com/);
-  const glm = validateAccount({ id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic/', model: 'glm-4.6', agents: ['claude', 'opencode'] });
+  const glm = validateAccount({ id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic/', model: 'glm-5.3', agents: ['claude', 'opencode'] });
   assert.equal(glm.baseUrl, 'https://api.z.ai/api/anthropic');
   assert.equal(accountKeyed(glm), true);
   assert.equal(accountKeyed(account()), false);
   assert.throws(() => validateAccount({ ...glm, agents: ['codex'] }), /Codex cannot run on Z.AI · Anthropic API/);
   assert.throws(() => validateAccount({ ...glm, baseUrl: 'http://api.z.ai/api/anthropic' }), /https/);
   assert.throws(() => validateAccount({ ...glm, baseUrl: 'https://user:pw@api.z.ai' }), /user name or password/);
-  const router = { id: 'or', label: 'OR', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-4.6', agents: ['codex'] };
+  const router = { id: 'or', label: 'OR', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5.3', agents: ['codex'] };
   assert.throws(() => validateAccount(router), /Responses API/);
   assert.deepEqual(validateAccount({ ...router, responsesApi: true }).agents, ['codex']);
   assert.deepEqual(supportedHarnesses({ preset: 'openrouter-openai' }), ['opencode', 'qwen', 'kimi']);

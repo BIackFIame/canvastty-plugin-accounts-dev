@@ -19,18 +19,18 @@
   "coreFiles": [
     {
       "path": "README.md",
-      "bytes": 11310,
-      "sha256": "bc0b94d5e663418aec654e58319462ad42f0b06989d8e152867fa26dbfdb67fc"
+      "bytes": 12147,
+      "sha256": "6a0491f11063a8960a1f3732e25f859c94e3989641754b724c34d62fc021ebc5"
     },
     {
       "path": "README.ru.md",
-      "bytes": 18171,
-      "sha256": "1705c90acf10ca123934e9f5c111c4bc66e1b7adca81bae61055b7f6983fa754"
+      "bytes": 19656,
+      "sha256": "6dd899aff03f62775675ced902891697eb3f3838c48df676a86b4c91436578fc"
     },
     {
       "path": "services/accounts.mjs",
-      "bytes": 195471,
-      "sha256": "0f63ca04463a3fdf7a1e2151520f3a1f143fba9448f3bb148a6319d64fe24527"
+      "bytes": 221428,
+      "sha256": "dce98f02da8a25dd32db18854ae374e0233ab9514f5419e676c5ea4d07cf1f61"
     },
     {
       "path": "settings/accounts.html",
@@ -39,8 +39,8 @@
     },
     {
       "path": "settings/accounts.js",
-      "bytes": 62431,
-      "sha256": "07bde0c2ac7f490f49e7b4af927310f067bde393b846930a93724763f4f8037e"
+      "bytes": 74003,
+      "sha256": "d4866cfa1f01809e3470bfe073e3d858f47c25ee56699a4b2106f4a1885fdc67"
     },
     {
       "path": "settings/accounts.css",
@@ -75,6 +75,23 @@
               {
                 "value": "none",
                 "label": "The agent's own sign-in"
+              }
+            ],
+            "visibleTo": [
+              "canvastty-assistant"
+            ]
+          },
+          {
+            "key": "model",
+            "label": "Model",
+            "label.ru": "Модель",
+            "kind": "select",
+            "optionsFrom": "service",
+            "default": "default",
+            "options": [
+              {
+                "value": "default",
+                "label": "The account's model (a plan's newest unless you chose one)"
               }
             ],
             "visibleTo": [

@@ -32,10 +32,10 @@ async function fixture(t, accounts) {
   return { service, storage, secrets, logs, setKey };
 }
 
-const glmPlan = { id: 'glm-plan', label: 'GLM plan', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude', 'opencode'] };
-const glmOpenAi = { id: 'glm-oai', label: 'GLM OpenAI', preset: 'zai-openai', baseUrl: 'https://api.z.ai/api/coding/paas/v4', model: 'glm-4.6', agents: ['opencode'] };
+const glmPlan = { id: 'glm-plan', label: 'GLM plan', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude', 'opencode'] };
+const glmOpenAi = { id: 'glm-oai', label: 'GLM OpenAI', preset: 'zai-openai', baseUrl: 'https://api.z.ai/api/coding/paas/v4', model: 'glm-5.3', agents: ['opencode'] };
 const local = { id: 'qwen-local', label: 'Qwen local', preset: 'ollama-local', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b', agents: ['opencode'] };
-const openrouter = { id: 'or', label: 'OpenRouter', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-4.6', agents: ['opencode'] };
+const openrouter = { id: 'or', label: 'OpenRouter', preset: 'openrouter-openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5.3', agents: ['opencode'] };
 
 test('validation: brokerable is off unless ticked, and never for Ollama or OpenRouter accounts', () => {
   assert.equal(validateAccount(glmPlan).brokerable, undefined);
@@ -52,7 +52,7 @@ test('validation: brokerable is off unless ticked, and never for Ollama or OpenR
 test('offers: the Anthropic endpoint as Claude Code calls it, the OpenAI one with its paths; one model; never a key', () => {
   assert.deepEqual(brokerOfferOf({ ...glmPlan, brokerable: true }, true), {
     id: 'glm-plan', label: 'GLM plan', protocol: 'anthropic', baseUrl: 'https://api.z.ai/api/anthropic/v1', paths: ['/messages'],
-    models: ['glm-4.6'], secretKey: 'key.glm-plan', auth: 'bearer', flatRate: true
+    models: ['glm-5.3'], secretKey: 'key.glm-plan', auth: 'bearer', flatRate: true
   });
   assert.deepEqual(brokerOfferOf({ ...glmOpenAi, brokerable: true, responsesApi: true }, false).paths, ['/chat/completions', '/responses', '/models']);
   assert.equal(brokerOfferOf(glmPlan, true), null, 'not marked');
@@ -82,18 +82,22 @@ test('admit: refused for an account not offered, another model, or a used-up pla
   await setKey('glm-plan');
   await setKey('glm-oai');
   const caller = { pluginId: 'canvastty-assistant' };
-  assert.deepEqual(service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-4.6', estimate: { bodyBytes: 10 } }), { ok: true });
-  assert.equal(service.brokerAdmit({ ref: 'glm-oai', caller, model: 'glm-4.6' }).ok, false, 'not marked');
-  assert.equal(service.brokerAdmit({ ref: 'missing', caller, model: 'glm-4.6' }).ok, false);
-  assert.match(service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-5' }).reason, /runs glm-4\.6 only/);
+  // A plan account offers its list's models (the bundled list here), not others.
+  assert.deepEqual(service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-5.3', estimate: { bodyBytes: 10 } }), { ok: true });
+  assert.deepEqual(service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-5.3-flash' }), { ok: true });
+  assert.deepEqual(service.brokerOffer().find(offer => offer.id === 'glm-plan').models, ['glm-5.3', 'glm-5.3-flash']);
+  assert.equal(service.brokerAdmit({ ref: 'glm-oai', caller, model: 'glm-5.3' }).ok, false, 'not marked');
+  assert.equal(service.brokerAdmit({ ref: 'missing', caller, model: 'glm-5.3' }).ok, false);
+  assert.match(service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-5' }).reason, /runs glm-5\.3, glm-5\.3-flash only/);
+  assert.equal(service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-4.6' }).ok, false, 'an old model is not offered');
   // A Z.AI limit error seen elsewhere (code 1308 = plan used up) makes the account exhausted.
   const account = service.settings.accounts.find((entry) => entry.id === 'glm-plan');
   service.quota.noteLimit(account, { source: 'zai-limit-error', at: Date.now(), windows: [], exhausted: { until: Date.now() + 3_600_000, code: '1308' } });
-  const refused = service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-4.6' });
+  const refused = service.brokerAdmit({ ref: 'glm-plan', caller, model: 'glm-5.3' });
   assert.equal(refused.ok, false);
   assert.match(refused.reason, /plan quota used up until/);
   assert.ok(logs.some((line) => /refused, the plan is used up/.test(line.message)));
-  assert.equal(service.brokerSettle({ ref: 'glm-plan', caller, model: 'glm-4.6', status: 'ok', httpStatus: 200, usage: { input: 1, output: 1, cached: 0 } }), null);
+  assert.equal(service.brokerSettle({ ref: 'glm-plan', caller, model: 'glm-5.3', status: 'ok', httpStatus: 200, usage: { input: 1, output: 1, cached: 0 } }), null);
   assert.equal(service.brokerSettle({ ref: 'nope', status: 'ok' }), null);
   await service.quota.stop?.();
 });

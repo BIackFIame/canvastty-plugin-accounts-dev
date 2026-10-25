@@ -45,6 +45,8 @@ export interface HarnessInput {
   model: string;
   /** A coding plan's smaller model (Claude Code's Haiku slot; OpenCode's titles and summaries). */
   smallModel?: string;
+  /** A coding plan's other models (its list): OpenCode lists them too, so the person can switch with /models. */
+  models?: readonly string[];
   /** The plugin secret holding the key; undefined for a keyless Ollama server. */
   secretKey?: string;
   /** Kimi with a key only: the value itself (its config file is the only place Kimi reads a key from here). */
@@ -213,7 +215,8 @@ function openCodePlan(input: HarnessInput, context: number | null): Contribution
   const provider = {
     npm, name: 'CanvasTTY',
     options: { baseURL, ...(input.secretKey !== undefined ? { apiKey: `{env:${MODEL_KEY_ENV}}` } : {}) },
-    models: Object.fromEntries([input.model, ...(input.smallModel && input.smallModel !== input.model ? [input.smallModel] : [])]
+    // The account's models first, then the rest of a plan's list (names that would be reserved keys are left out).
+    models: Object.fromEntries([...new Set([input.model, ...(input.smallModel ? [input.smallModel] : []), ...(input.models ?? []).filter(name => !APPROVAL_CONFIG_KEY.test(name))])]
       .map(name => [name, { name, ...(context ? { limit: { context, output: Math.min(32_768, Math.floor(context / 4)) } } : {}) }]))
   };
   const model = `${input.providerId}/${input.model}`;

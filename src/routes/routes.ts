@@ -48,6 +48,9 @@ export interface RouteRow {
   trust?: string;
   /** Coding-plan accounts (kind `subscription`): the plan whose pool (`pool:<plan>`) the account is in. */
   plan?: PlanProvider;
+  /** Coding-plan accounts: the small model (Claude Code's Haiku slot, OpenCode's small_model) and the plan's list. */
+  smallModel?: string;
+  models?: string[];
 }
 
 /** QuotaView as an orchestrator (and the Assistant's routing) reads it. */
@@ -79,12 +82,23 @@ export interface RouteFacts {
   ollama(baseUrl: string): Promise<OllamaDetection>;
   /** The account's quota as last read (null: this plugin cannot know it). */
   quota?(account: Account): QuotaView | null;
+  /** A coding-plan account's model list, newest first (null: not a plan account). */
+  models?(account: Account): readonly string[] | null;
+}
+
+/**
+ * The model of `models` a request names: the same id (any case), else the first (newest) id containing it; null when
+ * none does. A model filter on a coding-plan account matches its whole list, not only the model it runs by default.
+ */
+export function matchModel(models: readonly string[], wanted: string): string | null {
+  const lower = wanted.toLowerCase();
+  return models.find(id => id.toLowerCase() === lower) ?? models.find(id => id.toLowerCase().includes(lower)) ?? null;
 }
 
 const hostOf = (url: string): string => { try { return new URL(url).host; } catch { return url.slice(0, 60); } };
 
-export const launchOptionsFor = (accountId: string, effort = 'default'): Record<string, Record<string, string | boolean>> =>
-  ({ [PLUGIN_ID]: { account: accountId, effort, trustFolder: false } });
+export const launchOptionsFor = (accountId: string, effort = 'default', model?: string): Record<string, Record<string, string | boolean>> =>
+  ({ [PLUGIN_ID]: { account: accountId, effort, trustFolder: false, ...(model ? { model } : {}) } });
 
 interface Evaluated { state: RouteState; reason?: string; ollamaVersion?: string | null }
 
@@ -131,10 +145,14 @@ export async function listRoutes(accounts: readonly Account[], facts: RouteFacts
   const effort = checkEffort(filter.effort);
   // The rows asked for, before anything is probed: an account with none is not checked at all.
   // A coding-plan account runs Claude Code and OpenCode on the plan's Anthropic endpoint (plans/plans.ts) besides its agents.
-  const wanted = accounts.map(account => HARNESSES.filter(harness =>
+  const listOf = (account: Account): readonly string[] => [account.model, ...(facts.models?.(account) ?? [])];
+  // The model a filter picks on each account: its own model when that matches, else the newest match on a plan's list.
+  const picked = accounts.map(account => !filter.model ? account.model
+    : account.model.toLowerCase().includes(filter.model.toLowerCase()) ? account.model : matchModel(listOf(account), filter.model));
+  const wanted = accounts.map((account, index) => HARNESSES.filter(harness =>
     (filter.provider === undefined || filter.provider === harness) && (planOf(account) ? planHarnesses(account) : account.agents).includes(harness)
     && harnessSupport(harness, planLaunchAccount(account, harness)).ok
-    && (!filter.model || account.model.toLowerCase().includes(filter.model.toLowerCase()))));
+    && picked[index] !== null));
   const evaluated = await mapBounded(accounts, PROBE_CONCURRENCY, (account, index) => wanted[index]!.length ? stateOf(account, facts) : Promise.resolve(null));
   const rows: RouteRow[] = [];
   accounts.forEach((account, index) => {
@@ -152,11 +170,13 @@ export async function listRoutes(accounts: readonly Account[], facts: RouteFacts
       // probably reset accounts stay ready.
       if (state === 'ready' && quota?.state === 'exhausted') { state = 'quota-exhausted'; reason = `its quota is used up (${quota.note})`; }
       const plan = planOf(account);
+      const model = picked[index]!;
+      const models = plan ? facts.models?.(account) ?? null : null;
       rows.push({
         provider: harness, agent: HARNESS_LABELS[harness], accountId: account.id, account: account.label,
-        kind: plan ? 'subscription' : shape === 'local' ? 'ollama' : shape ? 'ollama-cloud' : 'api-key', model: account.model, endpoint: hostOf(planLaunchAccount(account, harness).baseUrl),
-        state, ...(reason !== undefined ? { reason } : {}), ...(state === 'ready' ? { launchOptions: launchOptionsFor(account.id, effort) } : {}),
-        ...(quota ? { quota: routeQuota(quota) } : {}), ...(plan ? { plan: plan.provider, trust: account.trust ?? 'unset' } : {})
+        kind: plan ? 'subscription' : shape === 'local' ? 'ollama' : shape ? 'ollama-cloud' : 'api-key', model, endpoint: hostOf(planLaunchAccount(account, harness).baseUrl),
+        state, ...(reason !== undefined ? { reason } : {}), ...(state === 'ready' ? { launchOptions: launchOptionsFor(account.id, effort, plan && model !== account.model ? model : undefined) } : {}),
+        ...(quota ? { quota: routeQuota(quota) } : {}), ...(plan ? { plan: plan.provider, trust: account.trust ?? 'unset', smallModel: account.smallModel ?? account.model, ...(models ? { models: models.slice(0, 16) } : {}) } : {})
       });
     }
   });

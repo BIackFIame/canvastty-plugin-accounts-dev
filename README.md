@@ -86,8 +86,17 @@ the plan's host: it is sent nowhere else. Several accounts of one plan form its 
 *Model account → GLM Coding Plan pool* (`pool:glm`, or `pool:minimax`) runs Claude Code or OpenCode on the account with
 the most quota left, skipping accounts without a key, used up (until their reset) or at their card limit. Both agents
 use the plan's Anthropic-compatible endpoint (`/api/anthropic` on Z.AI and BigModel, `/anthropic` on MiniMax); Claude
-Code gets the plan's model (GLM-5.3, MiniMax-M3.1-Flash) for its main slots and the small one (GLM-5.3-Flash) for Haiku,
-OpenCode only the plan's provider with every native agent pinned to it. GLM quota is read from
+Code gets the plan's model for its main slots and the small one for Haiku, OpenCode only the plan's provider (with the
+plan's models listed) and every native agent pinned to it.
+
+Models come from each account's own list: the plan's `GET …/models` on the account's host with its key (MiniMax
+`/v1/models`; GLM documents none, so its coding endpoint `/api/coding/paas/v4/models` is asked and a missing list falls
+back), read once a day and with *Read now*, else the plugin's built-in list (GLM-5.3 and GLM-5.3-Flash; MiniMax-M3 and
+MiniMax-M3.1-Flash, checked 2026-10-25). Unless you choose a model on the account, it runs the newest on its list (the
+highest version that is not a Flash; the newest Flash for the small slot) and moves to a newer one when it appears.
+Accounts saved with an older model (glm-4.6, MiniMax-M2, …) move to the newest once, and the page says so. The
+launcher's *Model* runs another model of a plan's list for one launch; routes, picks, shared reads and broker offers
+list each plan account's models. GLM quota is read from
 `/api/monitor/usage/quota/limit`, MiniMax quota from `/v1/token_plan/remains` (5 h and weekly windows; a pay-as-you-go
 `sk-api-` key has no plan quota and stays unknown). Accounts you saved earlier with a Z.AI or MiniMax preset appear here
 with their keys. `list_routes`, `pick_account` and the shared reads list them as `kind: "subscription"` with `plan`.

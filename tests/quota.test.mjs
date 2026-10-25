@@ -195,11 +195,11 @@ test('schedule: just after a predicted reset, often while exhausted or used, rar
 // ---------------------------------------------------------------------------------------------------------------
 
 const ACCOUNTS = [
-  { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude', 'opencode'] },
-  { id: 'glm-cn', label: 'GLM CN', preset: 'custom-anthropic', baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-4.6', agents: ['claude'] },
-  { id: 'mm', label: 'MiniMax', preset: 'minimax-anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2', agents: ['claude'] },
-  { id: 'or', label: 'OR', preset: 'openrouter-anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-4.6', agents: ['claude'] },
-  { id: 'glm-2', label: 'GLM two', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-4.6', agents: ['claude', 'opencode'] }
+  { id: 'glm', label: 'GLM', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude', 'opencode'] },
+  { id: 'glm-cn', label: 'GLM CN', preset: 'custom-anthropic', baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-5.3', agents: ['claude'] },
+  { id: 'mm', label: 'MiniMax', preset: 'minimax-anthropic', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3', agents: ['claude'] },
+  { id: 'or', label: 'OR', preset: 'openrouter-anthropic', baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-5.3', agents: ['claude'] },
+  { id: 'glm-2', label: 'GLM two', preset: 'zai-anthropic', baseUrl: 'https://api.z.ai/api/anthropic', model: 'glm-5.3', agents: ['claude', 'opencode'] }
 ];
 
 function fakeNetwork(answers) {

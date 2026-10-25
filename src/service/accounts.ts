@@ -20,6 +20,9 @@ import {
   type PlanProvider, type PlanRegion
 } from '../plans/plans.ts';
 import { PlanPool, summarizeSkipped, type KeyState, type PlanMember } from '../plans/service.ts';
+import { PlanModelReader } from '../plans/modelReader.ts';
+import { listed, olderThanList, sortModels, type PlanModelList } from '../plans/models.ts';
+import { matchModel } from '../routes/routes.ts';
 
 /**
  * The Accounts service: the launch contributor behind the launcher's "Model account" (and reasoning effort), the
@@ -56,7 +59,21 @@ export type CheckResult =
   | { kind: 'ollama'; running: boolean; version: string | null; problem: OllamaDetection['problem']; models: Array<{ name: string; local: boolean; tools: boolean; size: string | null }>; model: { installed: boolean; tools: boolean } | null }
   | { kind: 'key'; ok: boolean; problem: string | null };
 
-interface Stored { settings: AccountsSettings; keyOrigins: Record<string, string> }
+interface Stored { settings: AccountsSettings; keyOrigins: Record<string, string>; modelNotices?: ModelNotice[] }
+
+/**
+ * A plan account's model changed without the person choosing it: an account saved before the plan's lists (with an
+ * old id such as glm-4.6), or a newer model on its list. Shown on the page until the person dismisses it.
+ */
+export interface ModelNotice {
+  accountId: string; label: string; at: number;
+  from: { model: string; smallModel: string }; to: { model: string; smallModel: string };
+  /** `older`: the old model is older than every model the plan lists now. */
+  reason: 'older' | 'newer';
+}
+const MAX_NOTICES = 24;
+/** The launcher's Model choice that keeps the account's own model. */
+export const DEFAULT_MODEL_VALUE = 'default';
 
 const originOf = (url: string): string => { try { return new URL(url).origin; } catch { return ''; } };
 
@@ -70,6 +87,8 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 /** One coding-plan pool as the page, readers and orchestrators see it (no keys, hosts only). */
 export interface PlanSummary {
   plan: PlanProvider; label: string; agents: Harness[]; members: number; ready: number; busy: number;
+  /** The models on the members' lists, newest first (a launch may name one: launchOptions model). */
+  models: string[];
   best: (RouteQuota & { accountId: string }) | null; trust: string;
   launchOptions: Record<string, Record<string, string | boolean>>;
 }
@@ -100,6 +119,12 @@ export class AccountsService {
   readonly pools: PoolService;
   /** Coding-plan pools (pool:glm, pool:minimax) over the plan accounts (plans/service.ts). */
   readonly plans: PlanPool;
+  /** Each plan account's model list from its own host (plans/modelReader.ts). */
+  readonly models: PlanModelReader;
+  /** Plan accounts whose model followed their list without the person choosing (shown until dismissed). */
+  private modelNotices: ModelNotice[] = [];
+  /** apply() moved an account to its list's model: written on the next load(). */
+  private followPending = false;
   /** Default logins CanvasTTY saw used up, per agent, until their reset (memory only). */
   private readonly defaultSignIns = new Map<string, DefaultSignIn>();
   /** The last model account rows a shared read listed (answers a read whose checks run late). */
@@ -107,7 +132,7 @@ export class AccountsService {
   private readonly clock: () => number;
 
   /** `unread`: the storage could not be read at start (not the same as nothing saved yet). */
-  constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; savedPools?: unknown; poolsUnread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
+  constructor(options: { host: Host; dataDir: string; saved?: unknown; unread?: boolean; savedPools?: unknown; poolsUnread?: boolean; transport?: OllamaFetch; quotaFetch?: QuotaFetch; modelsFetch?: QuotaFetch; now?: () => number; random?: () => number }) {
     this.host = options.host;
     this.dataDir = options.dataDir;
     this.transport = options.transport;
@@ -115,6 +140,17 @@ export class AccountsService {
     this.settings = loadSettings(undefined);
     this.keyOrigins = {};
     this.unread = options.unread === true;
+    // Read before the accounts are applied: the saved lists decide which model an account follows.
+    this.models = new PlanModelReader({
+      dataDir: options.dataDir,
+      accounts: () => this.unread ? [] : this.settings.accounts,
+      // The same rule as the quota: only a key saved for the account's current address, only to that address.
+      key: async account => this.keyOrigins[account.id] === originOf(account.baseUrl) ? this.readKey(account) : null,
+      log: (level, message) => this.host.log(level, message),
+      onChange: () => { void this.followLists().catch(() => undefined); },
+      ...(options.modelsFetch ? { fetch: options.modelsFetch } : {}),
+      ...(options.now ? { now: options.now } : {})
+    });
     if (!this.unread) this.apply(options.saved);
     this.quota = new QuotaReader({
       dataDir: options.dataDir,
@@ -147,6 +183,66 @@ export class AccountsService {
     this.settings = loadSettings(saved.settings);
     this.keyOrigins = {};
     for (const [id, origin] of Object.entries(saved.keyOrigins ?? {})) if (typeof origin === 'string' && this.find(id)) this.keyOrigins[id] = origin;
+    this.modelNotices = loadNotices(saved.modelNotices).filter(notice => this.find(notice.accountId));
+    // Accounts saved before the plans' lists (glm-4.6, MiniMax-M2, …) move to their list's model now; written by load().
+    const followed = this.followed(this.settings.accounts);
+    if (followed.notices.length) {
+      this.settings = { version: 1, accounts: followed.accounts };
+      this.modelNotices = [...this.modelNotices, ...followed.notices].slice(-MAX_NOTICES);
+      this.followPending = true;
+    }
+  }
+
+  /** A plan account's list: its own, or the bundled one. */
+  modelList(account: Account): PlanModelList | null { return this.models.list(account); }
+
+  /**
+   * Plan accounts whose model the person did not choose follow their list: the newest main model and the newest small
+   * one. An account saved before this (no choice recorded) cannot say whether the person picked its model, so it
+   * follows too, and the page says so (a notice per account changed).
+   */
+  private followed(accounts: readonly Account[]): { accounts: Account[]; notices: ModelNotice[] } {
+    const notices: ModelNotice[] = [];
+    const next = accounts.map(account => {
+      const plan = planOf(account);
+      const list = plan ? this.models.list(account) : null;
+      if (!plan || !list) return account;
+      const model = account.modelPinned ? account.model : list.defaults.model;
+      const small = account.smallModelPinned ? account.smallModel ?? account.model : list.defaults.smallModel;
+      const before = { model: account.model, smallModel: account.smallModel ?? account.model };
+      if (before.model === model && before.smallModel === small) return account;
+      const { smallModel: _small, ...rest } = account;
+      notices.push({ accountId: account.id, label: account.label, at: this.clock(), from: before, to: { model, smallModel: small },
+        reason: olderThanList(plan.provider, list.models, before.model) ? 'older' : 'newer' });
+      return { ...rest, model, ...(small !== model ? { smallModel: small } : {}) } as Account;
+    });
+    return { accounts: next, notices };
+  }
+
+  /** A list changed (read from the host): accounts that follow it take its newest models, saved with a notice. */
+  private followLists(): Promise<void> {
+    return this.serialized(async () => {
+      if (this.unread) return;
+      const followed = this.followed(this.settings.accounts);
+      if (!followed.notices.length && !this.followPending) return;
+      const settings: AccountsSettings = { version: 1, accounts: followed.accounts };
+      const notices = [...this.modelNotices, ...followed.notices].slice(-MAX_NOTICES);
+      await this.persist({ settings, keyOrigins: this.keyOrigins, modelNotices: notices });
+      this.settings = settings;
+      this.modelNotices = notices;
+      this.followPending = false;
+      for (const notice of followed.notices) this.host.log('info', `${notice.accountId}: model ${notice.from.model} -> ${notice.to.model}, small ${notice.from.smallModel} -> ${notice.to.smallModel} (the plan's list)`);
+      if (followed.notices.length) this.host.emit('quota', { accountId: followed.notices[0]!.accountId, kind: 'models', at: this.clock(), note: 'model list' });
+    });
+  }
+
+  /** «OK» on the page's notice: the moves it named are not shown again. */
+  async modelNoticesSeen(): Promise<null> {
+    return this.serialized(async () => {
+      await this.persist({ settings: this.settings, keyOrigins: this.keyOrigins, modelNotices: [] });
+      this.modelNotices = [];
+      return null;
+    });
   }
 
   /**
@@ -155,11 +251,12 @@ export class AccountsService {
    */
   async load(): Promise<void> {
     await this.pools.load();
-    if (!this.unread) return;
+    if (!this.unread) { if (this.followPending) await this.followLists().catch(() => undefined); return; }
     this.loading ??= this.host.callHost('storage.get', { key: STORAGE_KEY })
       .then(saved => { this.apply(saved); this.unread = false; })
       .finally(() => { this.loading = null; });
     try { await this.loading; } catch { throw new Error('The saved accounts could not be read; nothing was changed. Try again.'); }
+    if (this.followPending) await this.followLists().catch(() => undefined);
   }
 
   private find(id: unknown): Account | undefined { return this.settings.accounts.find(account => account.id === id); }
@@ -172,7 +269,8 @@ export class AccountsService {
   /** Writes `value`; the caller takes it into memory only once this resolved, so memory never shows what is not saved. */
   private async persist(value: Stored): Promise<void> {
     if (this.unread) throw new Error('The saved accounts could not be read; nothing was changed. Try again.');
-    await this.host.callHost('storage.set', { key: STORAGE_KEY, value: value satisfies Stored });
+    const stored: Stored = { ...value, modelNotices: value.modelNotices ?? this.modelNotices };
+    await this.host.callHost('storage.set', { key: STORAGE_KEY, value: stored satisfies Stored });
   }
 
   private serialized<T>(run: () => Promise<T>): Promise<T> {
@@ -195,7 +293,7 @@ export class AccountsService {
 
   // ---- the settings page ----
 
-  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }>; pools: PoolsView; plans: PlansView }> {
+  async state(): Promise<{ settings: AccountsSettings; keys: Record<string, 'ok' | 'missing' | 'other-address' | 'none'>; checks: Record<string, CheckResult | { error: string }>; presets: typeof PRESETS; quota: Record<string, RouteQuota & { readable: boolean; events: QuotaEvent[] }>; pools: PoolsView; plans: PlansView; models: Record<string, PlanModelList>; modelNotices: ModelNotice[] }> {
     // One secrets read per keyed account, all at once (MAX_ACCOUNTS stays under the transport's host-call cap).
     const { settings } = this;
     const states = await Promise.all(settings.accounts.map(account =>
@@ -207,7 +305,9 @@ export class AccountsService {
       const view = this.quota.view(account);
       if (view) quota[account.id] = { ...routeQuota(view), readable: quotaUrlOf(account) !== null, events: this.quota.events(account.id).slice(-5) };
     }
-    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView() };
+    const models: Record<string, PlanModelList> = {};
+    for (const account of settings.accounts) { const list = this.models.list(account); if (list) models[account.id] = list; }
+    return { settings, keys, checks: Object.fromEntries(this.checks), presets: PRESETS, quota, pools: this.pools.view(), plans: this.plansView(), models, modelNotices: [...this.modelNotices] };
   }
 
   private plansView(): PlansView {
@@ -245,7 +345,8 @@ export class AccountsService {
   }
 
   async save(value: unknown): Promise<{ saved: true }> {
-    const next = validateSettings(value);
+    // A plan slot the person did not choose stays on the list's model (a page showing an older list cannot undo it).
+    const next: AccountsSettings = { version: 1, accounts: this.followed(validateSettings(offPlan(value)).accounts).accounts };
     const clash = next.accounts.find(account => this.pools.find(account.id));
     if (clash) throw new Error(`${clash.id} is already the name of a pool account; rename the model account.`);
     return this.serialized(async () => {
@@ -271,6 +372,8 @@ export class AccountsService {
       for (const id of [...removed, ...changed]) this.forgetCheck(id);
       for (const id of removed) this.quota.forget(id);
       for (const id of removed) this.plans.forget(id);
+      for (const id of removed) this.models.forget(id);
+      this.modelNotices = this.modelNotices.filter(notice => !removed.includes(notice.accountId));
       for (const id of removed) await removeHomes(this.dataDir, id).catch(() => undefined);
       return { saved: true as const };
     });
@@ -290,6 +393,9 @@ export class AccountsService {
       this.keyOrigins = keyOrigins;
       // Another key may be another plan: what was read with the old one no longer applies.
       this.quota.forget(account.id);
+      this.models.forget(account.id);
+      // The plan's list with the new key, in the background (the page shows it on its next load).
+      void this.models.read(account);
       return null;
     });
   }
@@ -329,13 +435,15 @@ export class AccountsService {
     return result;
   }
 
-  /** «Прочитать сейчас»: one read of the account's quota (bounded like every read: not twice within 30 s). */
+  /** «Прочитать сейчас»: one read of the account's quota and, for a plan account, its model list (bounded like every read: not twice within 30 s). */
   async readQuota(accountId: unknown): Promise<{ read: boolean }> {
     const account = this.find(accountId);
     if (!account) throw new Error('No such account.');
     const url = quotaUrlOf(account);
-    if (!url) return { read: false };
-    await this.quota.read(account, url);
+    // A plan account's model list is read again with it (bounded by the reader).
+    const models = planOf(account) ? this.models.read(account) : Promise.resolve();
+    if (!url) { await models; return { read: planOf(account) !== null }; }
+    await Promise.all([this.quota.read(account, url), models]);
     return { read: true };
   }
 
@@ -359,7 +467,28 @@ export class AccountsService {
       const members = this.plans.members(this.settings.accounts, plan);
       return members.length ? [{ value: `${PLAN_VALUE}${plan}`, label: `${PLAN_INFO[plan].label} pool · the account with the most room (${members.length})` }] : [];
     }) : [];
-    return { account: [...models, ...plans, ...this.pools.launchOptions(provider)] };
+    const modelChoices = harness ? this.modelOptions(harness) : [];
+    return { account: [...models, ...plans, ...this.pools.launchOptions(provider)], ...(modelChoices.length ? { model: modelChoices } : {}) };
+  }
+
+  /** The launcher's Model choices: the models on the lists of the person's plan accounts, per plan, newest first. */
+  private modelOptions(harness: Harness): Array<{ value: string; label: string }> {
+    if (!PLAN_HARNESSES.includes(harness)) return [];
+    const options: Array<{ value: string; label: string }> = [];
+    for (const plan of PLAN_PROVIDERS) {
+      const lists = this.plans.members(this.settings.accounts, plan).map(member => this.models.list(member.account)!);
+      const ids = sortModels(plan, [...new Set(lists.flatMap(list => list.models))]);
+      for (const id of ids) if (!options.some(option => option.value.toLowerCase() === id.toLowerCase())) options.push({ value: id, label: `${PLAN_INFO[plan].label} · ${id}` });
+    }
+    return options.slice(0, 64);
+  }
+
+  /** The model a plan account runs for this launch: the launcher's choice if the account's list has it, else its own. */
+  private launchModel(account: Account, wanted: string | null): { model: string } | { refuse: string } {
+    if (!wanted) return { model: account.model };
+    const list = this.models.list(account)?.models ?? [];
+    const found = listed([account.model, ...(account.smallModel ? [account.smallModel] : []), ...list], wanted);
+    return found ? { model: found } : { refuse: `${account.label} does not list the model ${wanted.slice(0, 80)} (its list: ${list.slice(0, 8).join(', ') || 'none'}); choose another model in the launcher.` };
   }
 
   /** May this account run this agent? A coding-plan account runs Claude Code and OpenCode on the plan's endpoint too. */
@@ -373,13 +502,19 @@ export class AccountsService {
     const options = context.options ?? {};
     const accountId = typeof options.account === 'string' && options.account ? options.account : 'none';
     const effort = typeof options.effort === 'string' && options.effort ? options.effort : 'default';
+    // The launcher's Model: a model of a coding plan's list, or the account's own (default).
+    const wantedModel = typeof options.model === 'string' && options.model && options.model !== DEFAULT_MODEL_VALUE ? options.model : null;
     // Only a person's launch may pre-answer the folder question; a subagent's options come from a model.
     const trust = options.trustFolder === true && context.role !== 'subagent';
     let effortArgs: string[];
     try { effortArgs = effortArguments(context.provider, effort); } catch (error) { return refuse(errorText(error)); }
 
     const planPool = accountId.startsWith(PLAN_VALUE) ? accountId.slice(PLAN_VALUE.length) : null;
-    if (planPool !== null && isPlanProvider(planPool)) return this.preparePlan(context, planPool, effortArgs, trust);
+    if (planPool !== null && isPlanProvider(planPool)) return this.preparePlan(context, planPool, effortArgs, trust, wantedModel);
+    const planAccount = this.find(accountId);
+    if (wantedModel && !(planAccount && planOf(planAccount))) {
+      return refuse(`The launcher's Model ${wantedModel.slice(0, 80)} is for GLM and MiniMax Coding Plan accounts; set Model to "The account's model" for this launch.`);
+    }
     if (this.pools.handles(accountId)) return this.pools.prepare(context, accountId, effort, trust);
     if (accountId === 'none') {
       // The agent's own sign-in: only effort, and Codex's per-run folder trust (never written to ~/.codex).
@@ -397,7 +532,7 @@ export class AccountsService {
         return refuse(`${account.label} already runs ${active} card(s), the most the person allows at once; use pool:${plan} to let the pool choose.`);
       }
     }
-    return this.prepareAccount(context, account, effortArgs, trust);
+    return this.prepareAccount(context, account, effortArgs, trust, wantedModel);
   }
 
   /**
@@ -405,12 +540,15 @@ export class AccountsService {
    * estimated, unknown; never one without a key, used up or at the person's card limit). A restored or resumed card
    * keeps the account it ran on while that one still exists.
    */
-  private async preparePlan(context: LaunchContext, plan: PlanProvider, effortArgs: string[], trust: boolean): Promise<LaunchAnswer> {
+  private async preparePlan(context: LaunchContext, plan: PlanProvider, effortArgs: string[], trust: boolean, wantedModel: string | null = null): Promise<LaunchAnswer> {
     const label = PLAN_INFO[plan].label;
     const harness = HARNESSES.find(entry => entry === context.provider);
     if (!harness || !PLAN_HARNESSES.includes(harness)) return refuse(`The ${label} pool runs Claude Code and OpenCode.`);
-    const members = this.plans.members(this.settings.accounts, plan);
-    if (!members.length) return refuse(`There are no ${label} accounts; add one in the Accounts settings (Subscription accounts).`);
+    const all = this.plans.members(this.settings.accounts, plan);
+    if (!all.length) return refuse(`There are no ${label} accounts; add one in the Accounts settings (Subscription accounts).`);
+    // A model chosen in the launcher: only the accounts whose list has it.
+    const members = wantedModel ? all.filter(member => 'model' in this.launchModel(member.account, wantedModel)) : all;
+    if (!members.length) return refuse(`No ${label} account lists the model ${wantedModel!.slice(0, 80)}; choose another model in the launcher.`);
     const earlier = (context.restoring || context.resume) ? this.plans.earlier(context.sessionId) : undefined;
     const kept = earlier ? members.find(member => member.id === earlier) : undefined;
     let account: Account | undefined = kept?.account;
@@ -419,7 +557,7 @@ export class AccountsService {
       account = ranked[0]?.account.account;
       if (!account) return refuse(`No ${label} account can take this card now: ${summarizeSkipped(skipped)}.`);
     }
-    return this.prepareAccount(context, account, effortArgs, trust);
+    return this.prepareAccount(context, account, effortArgs, trust, wantedModel);
   }
 
   private async rankPlans(members: readonly PlanMember[], request: { dataClass?: DataClass; mode?: DataClassMode; except?: string } = {}): Promise<ReturnType<PlanPool['rank']>> {
@@ -428,8 +566,10 @@ export class AccountsService {
     return this.plans.rank(members, member => ({ key: keys.get(member.id) ?? 'missing', quota: this.quota.view(member.account) ?? viewOf(emptyRecord(), this.clock()) }), request);
   }
 
-  private async prepareAccount(context: LaunchContext, saved: Account, effortArgs: string[], trust: boolean): Promise<LaunchAnswer> {
+  private async prepareAccount(context: LaunchContext, saved: Account, effortArgs: string[], trust: boolean, wantedModel: string | null = null): Promise<LaunchAnswer> {
     let account = saved;
+    const chosen = planOf(saved) ? this.launchModel(saved, wantedModel) : { model: saved.model };
+    if ('refuse' in chosen) return refuse(chosen.refuse);
     // A subagent's options come from a model (an orchestrator or the Assistant's Auto), so it never runs on OpenRouter;
     // an agent the person starts themselves still may.
     if (context.role === 'subagent' && decisionsOnlyAccount(account)) return refuse(`${account.label} cannot run a subagent: ${DECISIONS_ONLY_REASON}.`);
@@ -477,7 +617,7 @@ export class AccountsService {
       } finally { if (timer) clearTimeout(timer); }
       if (preflight.note) this.host.log('info', `${account.label}: ${preflight.note}`);
     }
-    let model = account.model;
+    let model = chosen.model;
     if (shape === 'cloud-direct') {
       const wire = ollamaWireModel(shape, account.model);
       if (!wire.ok) return refuse(`Model ${account.model} is not an Ollama Cloud name.`);
@@ -497,7 +637,10 @@ export class AccountsService {
     let contribution: Contribution;
     try {
       contribution = buildHarnessLaunch({
-        harness, protocol, ...(shape ? { ollamaShape: shape } : {}), baseUrl: account.baseUrl, model, ...(account.smallModel ? { smallModel: account.smallModel } : {}),
+        harness, protocol, ...(shape ? { ollamaShape: shape } : {}), baseUrl: account.baseUrl, model,
+        // The small slot keeps the account's small model (its own model when it has none) when the launcher chose another.
+        ...(account.smallModel ? { smallModel: account.smallModel } : model !== account.model && plan ? { smallModel: account.model } : {}),
+        ...(plan ? { models: this.models.list(saved)?.models ?? [] } : {}),
         ...(keyed ? { secretKey: secretKeyOf(account.id) } : {}), ...(keyValue ? { keyValue } : {}),
         providerId: providerIdOf(account.id), ...(home ? { home } : {}), contextWindow: preflight?.contextWindow ?? null,
         disableWebSearch: preflight?.cloudFeatures === true || shape === 'cloud-direct',
@@ -593,7 +736,8 @@ export class AccountsService {
           const view = this.quota.view(account);
           const plan = planOf(account);
           if (plan) {
-            return { accountId: account.id, account: account.label, kind: 'subscription', plan: plan.provider, agents: planHarnesses(account), running: this.plans.runningOn(account.id), concurrency: concurrencyOf(account), trust: account.trust ?? 'unset', quota: routeQuota(view ?? viewOf(emptyRecord(), at)) };
+            return { accountId: account.id, account: account.label, kind: 'subscription', plan: plan.provider, agents: planHarnesses(account), running: this.plans.runningOn(account.id), concurrency: concurrencyOf(account), trust: account.trust ?? 'unset', quota: routeQuota(view ?? viewOf(emptyRecord(), at)),
+              model: account.model, ...this.modelFields(account) };
           }
           return { accountId: account.id, account: account.label, kind: 'model-account', agents: [...account.agents], ...(view ? { quota: routeQuota(view) } : {}) };
         }),
@@ -624,7 +768,7 @@ export class AccountsService {
     return this.settings.accounts.flatMap(account => {
       if (this.keyOrigins[account.id] !== originOf(account.baseUrl)) return [];
       // A coding plan is a flat-rate subscription; another account is when its plan quota can be read.
-      const offer = brokerOfferOf(account, planOf(account) !== null || quotaUrlOf(account) !== null);
+      const offer = brokerOfferOf(account, planOf(account) !== null || quotaUrlOf(account) !== null, this.models.list(account)?.models ?? []);
       return offer ? [offer] : [];
     });
   }
@@ -636,9 +780,11 @@ export class AccountsService {
   brokerAdmit(params: unknown): { ok: true } | { ok: false; reason: string } {
     const values = params && typeof params === 'object' && !Array.isArray(params) ? params as Record<string, unknown> : {};
     const account = this.find(values.ref);
-    const offer = account && this.keyOrigins[account.id] === originOf(account.baseUrl) ? brokerOfferOf(account, false) : null;
+    const offer = account && this.keyOrigins[account.id] === originOf(account.baseUrl) ? brokerOfferOf(account, false, this.models.list(account)?.models ?? []) : null;
     if (!account || !offer) return { ok: false, reason: 'This account is not offered to other extensions.' };
-    if (typeof values.model !== 'string' || !offer.models.includes(values.model)) return { ok: false, reason: `${account.label} runs ${account.model} only.` };
+    if (typeof values.model !== 'string' || !offer.models.includes(values.model)) {
+      return { ok: false, reason: offer.models.length > 1 ? `${account.label} runs ${offer.models.slice(0, 8).join(', ')} only.` : `${account.label} runs ${account.model} only.` };
+    }
     const view = this.quota.view(account);
     if (view?.state === 'exhausted') {
       const caller = values.caller && typeof values.caller === 'object' ? String((values.caller as { pluginId?: unknown }).pluginId ?? '').slice(0, 80) : '';
@@ -667,6 +813,7 @@ export class AccountsService {
     return {
       key: account => this.keyState(account).catch(() => 'missing' as const),
       quota: account => this.quota.view(account),
+      models: account => this.models.list(account)?.models ?? null,
       ollama: baseUrl => {
         if (!detections.has(baseUrl)) detections.set(baseUrl, detectOllama(baseUrl, this.transport, 1_500));
         return detections.get(baseUrl)!;
@@ -712,8 +859,9 @@ export class AccountsService {
       const { ranked } = await this.rankPlans(members);
       const best = ranked[0];
       const trust = ranked.reduce<string | null>((low, entry) => low === null || order[entry.account.trust]! < order[low]! ? entry.account.trust : low, null) ?? 'unset';
+      const models = sortModels(plan, [...new Set(members.flatMap(member => this.models.list(member.account)?.models ?? []))]).slice(0, 16);
       out.push({
-        plan, label: `${PLAN_INFO[plan].label} pool`, agents: [...PLAN_HARNESSES], members: members.length, ready: ranked.length,
+        plan, label: `${PLAN_INFO[plan].label} pool`, agents: [...PLAN_HARNESSES], members: members.length, ready: ranked.length, models,
         busy: members.filter(member => this.plans.active(member.id) > 0).length,
         best: best ? { ...routeQuota(best.facts.quota), accountId: best.account.id } : null, trust,
         launchOptions: { [PLUGIN_ID]: { account: `${PLAN_VALUE}${plan}`, effort: 'default', trustFolder: false } }
@@ -723,9 +871,17 @@ export class AccountsService {
   }
 
   /** The plan account with the most room for this agent now, across the person's plans; reserved for a minute. */
-  private async pickPlan(harness: Harness, request: { effort: string; model?: string; dataClass?: DataClass; mode?: DataClassMode }): Promise<{ accountId: string; account: string; plan: PlanProvider; model: string; launchOptions: Record<string, Record<string, string | boolean>>; why: string; quota: RouteQuota; trust: string } | null> {
+  private async pickPlan(harness: Harness, request: { effort: string; model?: string; dataClass?: DataClass; mode?: DataClassMode }): Promise<{ accountId: string; account: string; plan: PlanProvider; model: string; smallModel?: string; models?: string[]; modelsFrom?: string; launchOptions: Record<string, Record<string, string | boolean>>; why: string; quota: RouteQuota; trust: string } | null> {
     if (request.effort !== 'default' && harness !== 'claude') return null;
-    const members = this.plans.members(this.settings.accounts).filter(member => !request.model || member.account.model.toLowerCase().includes(request.model.toLowerCase()));
+    // A model filter matches the account's list (its own model first), and the launch then runs the matched model.
+    const matched = new Map<string, string>();
+    const members = this.plans.members(this.settings.accounts).filter(member => {
+      if (!request.model) return true;
+      const own = member.account.model.toLowerCase().includes(request.model.toLowerCase()) ? member.account.model : null;
+      const found = own ?? matchModel(this.models.list(member.account)?.models ?? [], request.model);
+      if (found) matched.set(member.id, found);
+      return found !== null;
+    });
     if (!members.length) return null;
     const { ranked, skipped } = await this.rankPlans(members, { ...(request.dataClass ? { dataClass: request.dataClass } : {}), ...(request.mode ? { mode: request.mode } : {}) });
     const chosen = ranked[0];
@@ -733,12 +889,20 @@ export class AccountsService {
     this.plans.reserve(chosen.account.id);
     const quota = routeQuota(chosen.facts.quota);
     const room = quota.remainingPercent === null ? `quota ${quota.state}` : `${Math.round((100 - quota.remainingPercent) * 10) / 10}% used, ${quota.remainingPercent}% left (${quota.confidence})`;
+    const model = matched.get(chosen.account.id) ?? chosen.account.account.model;
     return {
-      accountId: chosen.account.id, account: chosen.account.label, plan: chosen.account.provider, model: chosen.account.account.model, trust: chosen.account.trust, quota,
-      launchOptions: { [PLUGIN_ID]: { account: chosen.account.id, effort: request.effort, trustFolder: false } },
+      accountId: chosen.account.id, account: chosen.account.label, plan: chosen.account.provider, model, trust: chosen.account.trust, quota,
+      ...this.modelFields(chosen.account.account),
+      launchOptions: { [PLUGIN_ID]: { account: chosen.account.id, effort: request.effort, trustFolder: false, ...(model !== chosen.account.account.model ? { model } : {}) } },
       why: `${HARNESS_LABELS[harness]} on the ${PLAN_INFO[chosen.account.provider].label} account ${chosen.account.label}: ${room}, the most room among ${ranked.length} free of ${members.length}`
         + (chosen.note ? `; ${chosen.note}` : '') + (skipped.length ? `; skipped ${skipped.map(entry => `${entry.account.label} (${entry.reason})`).join('; ')}` : '') + '.'
     };
+  }
+
+  /** A plan account's models as readers see them: the small model and the list (`modelsFrom`: live or bundled). */
+  private modelFields(account: Account): { smallModel?: string; models?: string[]; modelsFrom?: string } {
+    const list = this.models.list(account);
+    return list ? { smallModel: account.smallModel ?? account.model, models: list.models.slice(0, 16), modelsFrom: list.source } : {};
   }
 
   async tool(name: string, input: Record<string, unknown>): Promise<{ content: unknown; isError?: boolean }> {
@@ -766,7 +930,7 @@ export class AccountsService {
       }
       return { content: {
         routes,
-        pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent, and their coding plans (GLM, MiniMax: rows with "plan"). Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time; a coding-plan account takes several cards at once up to the person's limit, and its pool is {"${PLUGIN_ID}":{"account":"pool:glm"}} or "pool:minimax" for Claude Code and OpenCode.`,
+        pools: `Subscription pools (kind "subscription") are the person's own sign-ins, several per agent, and their coding plans (GLM, MiniMax: rows with "plan"). Pass launchOptions {"${PLUGIN_ID}":{"account":"pool:<agent>"}} to let the pool choose the account with the most room at launch, or a row's launchOptions for that account. One card per sign-in at a time; a coding-plan account takes several cards at once up to the person's limit, and its pool is {"${PLUGIN_ID}":{"account":"pool:glm"}} or "pool:minimax" for Claude Code and OpenCode. A coding-plan row lists the plan's models (models, newest first; model is what it runs, smallModel its small slot): add "model":"<one of them>" to its launchOptions to run another one.`,
         signIn: 'Each agent\'s own CLI sign-in is not listed here: spawn_agent without launchOptions uses it, and CanvasTTY reports when it does not work.',
         ...(this.exhaustedDefaults(provider).length ? { usedUpSignIns: this.exhaustedDefaults(provider).map(entry => `${entry.provider}'s own sign-in: ${entry.window ?? 'a window'} used up${entry.resetsAt ? ` until ${new Date(entry.resetsAt).toISOString()}` : ''}; prefer its pool or an account`) } : {}),
         howTo: 'Pass a ready route\'s launchOptions to spawn_agent unchanged (same provider).'
@@ -807,6 +971,30 @@ export class AccountsService {
 
 /** A route row as shared: only the fields readers route on (no key states beyond the row's state, no paths). */
 function shareRow(row: object): Record<string, unknown> {
-  const keep = ['provider', 'agent', 'accountId', 'account', 'kind', 'plan', 'model', 'endpoint', 'state', 'reason', 'launchOptions', 'quota', 'trust'];
+  const keep = ['provider', 'agent', 'accountId', 'account', 'kind', 'plan', 'model', 'smallModel', 'models', 'endpoint', 'state', 'reason', 'launchOptions', 'quota', 'trust'];
   return Object.fromEntries(Object.entries(row).filter(([key]) => keep.includes(key)));
+}
+
+/** Notices as saved (anything else is dropped). */
+function loadNotices(value: unknown): ModelNotice[] {
+  if (!Array.isArray(value)) return [];
+  const text = (entry: unknown): entry is string => typeof entry === 'string' && entry.length > 0 && entry.length <= 200;
+  const pair = (entry: unknown): entry is { model: string; smallModel: string } => !!entry && typeof entry === 'object' && text((entry as Record<string, unknown>).model) && text((entry as Record<string, unknown>).smallModel);
+  return value.slice(-MAX_NOTICES).flatMap(entry => {
+    const raw = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+    if (!text(raw.accountId) || !text(raw.label) || typeof raw.at !== 'number' || !pair(raw.from) || !pair(raw.to)) return [];
+    return [{ accountId: raw.accountId, label: raw.label, at: raw.at, from: { model: raw.from.model, smallModel: raw.from.smallModel }, to: { model: raw.to.model, smallModel: raw.to.smallModel }, reason: raw.reason === 'older' ? 'older' as const : 'newer' as const }];
+  });
+}
+
+/** An account moved off a plan's host keeps no plan model slots (they were the plan's): only the model it runs. */
+function offPlan(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as { accounts?: unknown }).accounts)) return value;
+  return { ...value, accounts: (value as { accounts: unknown[] }).accounts.map(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+    const raw = entry as Record<string, unknown>;
+    if (typeof raw.baseUrl !== 'string' || typeof raw.preset !== 'string' || planOf({ preset: raw.preset as Account['preset'], baseUrl: raw.baseUrl.trim().replace(/\/+$/u, '') })) return entry;
+    const { smallModel: _small, modelPinned: _pinned, smallModelPinned: _smallPinned, ...rest } = raw;
+    return rest;
+  }) };
 }

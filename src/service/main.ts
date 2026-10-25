@@ -16,7 +16,7 @@ serve({
   exit: code => {
     const done = (): never => process.exit(code);
     setTimeout(done, 500).unref();
-    void Promise.allSettled([started?.quota.stop(), started?.pools.stop()]).finally(done);
+    void Promise.allSettled([started?.quota.stop(), started?.pools.stop(), started?.models.stop()]).finally(done);
   },
   onInitialize: async (params, host: Host) => {
     const dataDir = typeof params.dataDir === 'string' ? params.dataDir : process.cwd();
@@ -25,9 +25,13 @@ serve({
     const read = await host.callHost('storage.get', { key: 'accounts' }).then(value => ({ value }), () => null);
     if (!read) host.log('warn', 'The saved accounts could not be read; reading them again on the next request.');
     const pools = await host.callHost('storage.get', { key: 'pools' }).then(value => ({ value }), () => null);
-    started = new AccountsService({ host, dataDir, quotaFetch: networkFetch, ...(read ? { saved: read.value } : { unread: true }), ...(pools ? { savedPools: pools.value } : { poolsUnread: true }) });
+    // CANVASTTY_ACCOUNTS_NO_NETWORK=1 (this plugin's own tests): quota and model lists are never read from a provider.
+    const network = process.env.CANVASTTY_ACCOUNTS_NO_NETWORK === '1' ? {} : { quotaFetch: networkFetch, modelsFetch: networkFetch };
+    started = new AccountsService({ host, dataDir, ...network, ...(read ? { saved: read.value } : { unread: true }), ...(pools ? { savedPools: pools.value } : { poolsUnread: true }) });
     // Quotas are read on the reader's own schedule from now on, whether or not any page is open.
     started.quota.start();
+    // Plan accounts' model lists: once a day from each account's own host (and on "Read now").
+    started.models.start();
     // Pools: card events (one card per sign-in) and CanvasTTY's quota reads of each account home.
     await started.pools.start();
     resolveReady(started);
@@ -56,6 +60,7 @@ serve({
     keyChanged: async params => (await service()).keyChanged(params.accountId),
     quotaRead: async params => (await service()).readQuota(params.accountId),
     planAdd: async params => (await service()).planAdd(params),
+    modelNoticesSeen: async () => (await service()).modelNoticesSeen(),
     poolAdd: async params => (await service()).poolAdd(params),
     poolSignIn: async params => (await service()).poolSignIn(params.accountId),
     poolUpdate: async params => (await service()).poolUpdate(params),
